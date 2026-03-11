@@ -3,46 +3,69 @@ import { supabase } from '../lib/supabaseClient';
 
 export default function Auction() {
   const [owner, setOwner] = useState(null);
+  const [activePlayer, setActivePlayer] = useState(null);
+  const [bidValue, setBidValue] = useState('');
 
   useEffect(() => {
-    const fetchOwnerData = async () => {
-      // This fetches the data for the user you created in Supabase
-      const { data, error } = await supabase
-        .from('league_owners')
-        .select('*')
-        .single();
-      
-      if (data) setOwner(data);
+    const fetchData = async () => {
+      // Get Owner Data
+      const { data: ownerData } = await supabase.from('league_owners').select('*').single();
+      setOwner(ownerData);
+
+      // Get Current Auction Player
+      const { data: auctionData } = await supabase.from('active_auction').select('*, players(*)').single();
+      if (auctionData) setActivePlayer(auctionData.players);
     };
-    fetchOwnerData();
+    fetchData();
   }, []);
 
-  if (!owner) return (
-    <div style={{ background: '#111', color: '#fff', height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-      <h2>Entering Stadium...</h2>
-    </div>
-  );
+  const submitBid = async () => {
+    if (!bidValue || bidValue <= 0) return alert("Enter a valid bid!");
+    
+    const { error } = await supabase.from('bids_draft').insert([
+      { owner_id: owner.id, player_id: activePlayer.id, bid_amount: bidValue }
+    ]);
+
+    if (!error) {
+      alert("Bid Placed Successfully!");
+      setBidValue('');
+    } else {
+      alert("Error placing bid: " + error.message);
+    }
+  };
+
+  if (!owner) return <div style={{background:'#111', color:'#fff', height:'100vh', padding:'20px'}}>Entering Stadium...</div>;
 
   return (
     <div style={{ backgroundColor: '#111', color: 'white', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' }}>
-      <header style={{ borderBottom: '2px solid #e11d48', paddingBottom: '10px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: '1.5rem', color: '#e11d48' }}>{owner.team_name}</h1>
-          <p style={{ margin: 0, color: '#9ca3af' }}>Owner Dashboard</p>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <p style={{ margin: 0, color: '#9ca3af', fontSize: '0.9rem' }}>Remaining Budget</p>
-          <h2 style={{ margin: 0, color: '#22c55e', fontSize: '2rem' }}>{owner.budget} Cr</h2>
-        </div>
+      <header style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #e11d48', paddingBottom: '10px' }}>
+        <h1 style={{ color: '#e11d48' }}>{owner.team_name}</h1>
+        <h2 style={{ color: '#22c55e' }}>{owner.budget} Cr</h2>
       </header>
 
-      <div style={{ backgroundColor: '#1e1e1e', padding: '40px', borderRadius: '15px', textAlign: 'center', border: '1px solid #333' }}>
-        <h3 style={{ color: '#fff', marginBottom: '10px' }}>Live Auction Window</h3>
-        <p style={{ color: '#9ca3af' }}>Waiting for the administrator to start the player bidding session...</p>
-        <div style={{ marginTop: '20px', padding: '10px', backgroundColor: '#2d2d2d', borderRadius: '5px', display: 'inline-block' }}>
-          <span style={{ color: '#fbbf24' }}>●</span> Connection Status: <span style={{ color: '#22c55e' }}>Connected to Supabase</span>
+      {activePlayer ? (
+        <div style={{ marginTop: '40px', textAlign: 'center', backgroundColor: '#222', padding: '30px', borderRadius: '15px' }}>
+          <h3 style={{ color: '#9ca3af' }}>CURRENT PLAYER</h3>
+          <h1 style={{ fontSize: '3rem', margin: '10px 0' }}>{activePlayer.name}</h1>
+          <p style={{ fontSize: '1.2rem' }}>Type: {activePlayer.role} | Base Price: {activePlayer.base_price} Cr</p>
+          
+          <div style={{ marginTop: '30px' }}>
+            <input 
+              type="number" placeholder="Enter Your Secret Bid" 
+              value={bidValue} onChange={(e) => setBidValue(e.target.value)}
+              style={{ padding: '15px', borderRadius: '5px', width: '200px', fontSize: '1.1rem' }}
+            />
+            <button 
+              onClick={submitBid}
+              style={{ padding: '15px 30px', marginLeft: '10px', backgroundColor: '#e11d48', color: 'white', border: 'none', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer' }}
+            >
+              PLACE BID
+            </button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <p style={{ textAlign: 'center', marginTop: '50px' }}>Waiting for next player...</p>
+      )}
     </div>
   );
 }
