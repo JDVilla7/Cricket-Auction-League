@@ -9,27 +9,29 @@ export default function Auction() {
     const { data: ownerData } = await supabase.from('league_owners').select('*').single();
     setOwner(ownerData);
 
-    // Fetching through the link using your exact column: 'type'
+    // This fetches the active row (ID 2) and the linked player data
     const { data: auctionData } = await supabase
       .from('active_auction')
       .select('player_id, players(id, name, type, base_price)')
       .eq('id', 2)
       .single();
 
-    if (auctionData) setActivePlayer(auctionData.players);
+    if (auctionData && auctionData.players) {
+      setActivePlayer(auctionData.players);
+    } else {
+      setActivePlayer(null);
+    }
   };
 
   useEffect(() => {
     fetchData();
-    // Realtime listener
-    const channel = supabase.channel('live-auction')
+    const channel = supabase.channel('auction-live')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'active_auction' }, fetchData)
       .subscribe();
-
     return () => supabase.removeChannel(channel);
   }, []);
 
-  if (!owner) return <div style={{background:'#111', color:'#fff', height:'100vh', display:'flex', justifyContent:'center', alignItems:'center'}}>Entering Stadium...</div>;
+  if (!owner) return <div style={{background:'#111', color:'#fff', height:'100vh', padding:'20px'}}>Loading...</div>;
 
   return (
     <div style={{ backgroundColor: '#111', color: 'white', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' }}>
@@ -41,14 +43,14 @@ export default function Auction() {
       {activePlayer ? (
         <div style={{ textAlign: 'center', marginTop: '60px' }}>
           <h3 style={{ color: '#9ca3af' }}>CURRENT PLAYER</h3>
-          <h1 style={{ fontSize: '4.5rem', margin: '10px 0' }}>{activePlayer.name}</h1>
+          <h1 style={{ fontSize: '4rem', margin: '10px 0' }}>{activePlayer.name}</h1>
           <p style={{ fontSize: '1.5rem', color: '#fbbf24' }}>
             {activePlayer.type} | Base: {activePlayer.base_price / 10000000} Cr
           </p>
         </div>
       ) : (
         <div style={{ textAlign: 'center', marginTop: '100px', color: '#666' }}>
-          <h3>Waiting for the Auctioneer to start...</h3>
+          <h3>Waiting for the Auctioneer to present the next player...</h3>
         </div>
       )}
     </div>
