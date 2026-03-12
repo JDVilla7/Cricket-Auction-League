@@ -45,25 +45,26 @@ export default function Admin() {
         phase: "Round 1" 
       }
     ]);
-
     if (resError) return alert("Result Error: " + resError.message);
 
     // 2. Update Owner Budget
     const { error: budError } = await supabase.from('league_owners').update({ budget: newBudget }).eq('id', bid.owner_id);
     if (budError) return alert("Budget Error: " + budError.message);
 
-    // 3. Delete the bid from the draft
-    const { error: delError } = await supabase.from('bids_draft').delete().eq('id', bid.id);
+    // 3. Delete the bid from draft (using owner_id and player_id as a backup if 'id' is missing)
+    const { error: delError } = await supabase.from('bids_draft')
+      .delete()
+      .match({ owner_id: bid.owner_id, player_id: bid.player_id });
+    
     if (delError) return alert("Delete Error: " + delError.message);
 
-    alert(`SUCCESS! ${bid.players?.name} sold to ${bid.league_owners?.team_name}`);
+    alert(`SUCCESS! Sold to ${bid.league_owners?.team_name}`);
     fetchBids();
   };
 
   const pushPlayer = async () => {
     const { error } = await supabase.from('active_auction').update({ player_id: pid }).eq('id', 2);
-    if (!error) alert("Player " + pid + " is now LIVE!");
-    else alert("Push Error: " + error.message);
+    if (!error) alert("Player " + pid + " pushed!");
   };
 
   return (
@@ -87,20 +88,18 @@ export default function Admin() {
             <button onClick={fetchBids} style={{ background: 'transparent', border: '1px solid #444', color: '#888', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer' }}>REFRESH</button>
           </div>
 
-          {liveBids.length > 0 ? liveBids.map((bid) => (
-            <div key={bid.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 0', borderBottom: '1px solid #222' }}>
+          {liveBids.length > 0 ? liveBids.map((bid, index) => (
+            <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 0', borderBottom: '1px solid #222' }}>
               <div>
-                <div style={{ fontWeight: 'bold' }}>{bid.league_owners?.team_name || 'Loading Name...'}</div>
-                <div style={{ color: '#666', fontSize: '0.9rem' }}>{bid.players?.name || 'Loading Player...'}</div>
+                <div style={{ fontWeight: 'bold' }}>{bid.league_owners?.team_name || 'Owner'}</div>
+                <div style={{ color: '#666', fontSize: '0.9rem' }}>{bid.players?.name}</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                 <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '1.2rem' }}>{bid.bid_amount} Cr</span>
                 <button onClick={() => handleSold(bid)} style={{ background: '#22c55e', color: '#000', border: 'none', padding: '8px 15px', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer' }}>SOLD</button>
               </div>
             </div>
-          )) : (
-            <p style={{ textAlign: 'center', color: '#444', marginTop: '20px' }}>Waiting for bids...</p>
-          )}
+          )) : <p style={{ textAlign: 'center', color: '#444' }}>No bids yet...</p>}
         </div>
       </div>
     </div>
