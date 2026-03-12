@@ -30,35 +30,40 @@ export default function Admin() {
   }, []);
 
   const handleSold = async (bid) => {
-    const newBudget = (bid.league_owners?.budget || 0) - bid.bid_amount;
+    const currentBudget = bid.league_owners?.budget || 0;
+    const bidAmount = bid.bid_amount || 0;
+    const newBudget = currentBudget - bidAmount;
 
-    // 1. Record Result (Phase set to 1 if you keep it as number, or "Round 1" if you changed it to text)
+    if (newBudget < 0) return alert("Error: Insufficient Budget!");
+
+    // 1. Record Result
     const { error: resError } = await supabase.from('auction_results').insert([
       { 
         player_id: bid.player_id, 
         owner_id: bid.owner_id, 
-        winning_bid: bid.bid_amount, 
-        phase: "1" // Change this to "Round 1" ONLY AFTER you change the column type to 'text' in Supabase
+        winning_bid: bidAmount, 
+        phase: "Round 1" 
       }
     ]);
 
-    // 2. Update Budget
+    if (resError) return alert("Result Error: " + resError.message);
+
+    // 2. Update Owner Budget
     const { error: budError } = await supabase.from('league_owners').update({ budget: newBudget }).eq('id', bid.owner_id);
+    if (budError) return alert("Budget Error: " + budError.message);
 
-    // 3. Clear the bid
-    await supabase.from('bids_draft').delete().eq('id', bid.id);
+    // 3. Delete the bid from the draft
+    const { error: delError } = await supabase.from('bids_draft').delete().eq('id', bid.id);
+    if (delError) return alert("Delete Error: " + delError.message);
 
-    if (!resError && !budError) {
-      alert(`SOLD! ${bid.players?.name} to ${bid.league_owners?.team_name}`);
-      fetchBids();
-    } else {
-      alert("Error: Check if 'phase' column is set to text in Supabase.");
-    }
+    alert(`SUCCESS! ${bid.players?.name} sold to ${bid.league_owners?.team_name}`);
+    fetchBids();
   };
 
   const pushPlayer = async () => {
     const { error } = await supabase.from('active_auction').update({ player_id: pid }).eq('id', 2);
-    if (!error) alert("Player " + pid + " pushed!");
+    if (!error) alert("Player " + pid + " is now LIVE!");
+    else alert("Push Error: " + error.message);
   };
 
   return (
@@ -67,7 +72,6 @@ export default function Admin() {
       <p style={{ color: '#666', marginBottom: '30px' }}>● {status}</p>
 
       <div style={{ width: '100%', maxWidth: '600px' }}>
-        {/* CENTERED CONTROL BOX */}
         <div style={{ background: '#111', padding: '25px', borderRadius: '12px', border: '1px solid #333', marginBottom: '20px', textAlign: 'center' }}>
           <input 
             type="number" placeholder="Enter Player ID" 
@@ -77,7 +81,6 @@ export default function Admin() {
           <button onClick={pushPlayer} style={{ padding: '12px 20px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>PUSH LIVE</button>
         </div>
 
-        {/* CENTERED BID LOG */}
         <div style={{ background: '#111', padding: '25px', borderRadius: '12px', border: '1px solid #333' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h2 style={{ color: '#fbbf24', margin: 0 }}>Secret Bid Log</h2>
@@ -87,8 +90,8 @@ export default function Admin() {
           {liveBids.length > 0 ? liveBids.map((bid) => (
             <div key={bid.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 0', borderBottom: '1px solid #222' }}>
               <div>
-                <div style={{ fontWeight: 'bold' }}>{bid.league_owners?.team_name || 'Loading...'}</div>
-                <div style={{ color: '#666', fontSize: '0.9rem' }}>{bid.players?.name}</div>
+                <div style={{ fontWeight: 'bold' }}>{bid.league_owners?.team_name || 'Loading Name...'}</div>
+                <div style={{ color: '#666', fontSize: '0.9rem' }}>{bid.players?.name || 'Loading Player...'}</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                 <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '1.2rem' }}>{bid.bid_amount} Cr</span>
@@ -96,7 +99,7 @@ export default function Admin() {
               </div>
             </div>
           )) : (
-            <p style={{ textAlign: 'center', color: '#444', marginTop: '20px' }}>No active bids found.</p>
+            <p style={{ textAlign: 'center', color: '#444', marginTop: '20px' }}>Waiting for bids...</p>
           )}
         </div>
       </div>
