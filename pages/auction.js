@@ -15,18 +15,19 @@ export default function Auction() {
   const sync = async () => {
     if (!id) return;
 
-    // 1. Fetch Owner & Active Global Status
+    // 1. Fetch Owner & Squad Count (Always run this)
     const { data: owner } = await supabase.from('league_owners').select('*').eq('id', id).single();
-    const { data: act } = await supabase.from('active_auction').select('*').eq('id', 2).single();
-    
-    // 2. Fetch Squad with Name Join
     const { data: squad, count } = await supabase
       .from('auction_results')
-      .select(`winning_bid, player_id, players(name)`)
+      .select(`winning_bid, player_id, players(name)`, { count: 'exact' })
       .eq('owner_id', id);
 
     setSquadList(squad || []);
+    
+    // 2. Fetch Active Global Status
+    const { data: act } = await supabase.from('active_auction').select('*').eq('id', 2).single();
 
+    // 3. Update State (Keep squadCount even if no active player)
     if (act?.player_id) {
       const { data: player } = await supabase.from('players').select('*').eq('id', act.player_id).single();
       const { data: bid } = await supabase.from('bids_draft')
@@ -42,6 +43,9 @@ export default function Auction() {
         winAmt: act.winning_amount,
         squadCount: count || 0
       });
+    } else {
+      // If no player is pushed, we still need to update the owner and squad count
+      setSt(prev => ({ ...prev, owner, squadCount: count || 0, player: null }));
     }
   };
 
@@ -104,11 +108,11 @@ export default function Auction() {
               {slotsRemaining === 0 ? "SQUAD FULL" : leading ? "YOU LEAD" : `BID ${(st.bidderId ? st.highBid + 0.25 : st.highBid).toFixed(2)} Cr`}
             </button>
           </div>
-        ) : <h2 style={{color:'#333'}}>WAITING...</h2>}
+        ) : <h2 style={{color:'#333'}}>WAITING FOR AUCTIONEER...</h2>}
       </div>
 
       {/* FOOTER BUTTON */}
-      <button onClick={() => { sync(); setShowSquad(true); }} style={{ padding: '15px', background: '#111', color: '#ccc', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold' }}>
+      <button onClick={() => { sync(); setShowSquad(true); }} style={{ padding: '15px', background: '#111', color: '#ccc', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold', cursor: 'pointer' }}>
         📊 VIEW MY SQUAD ({st.squadCount})
       </button>
 
@@ -116,7 +120,7 @@ export default function Auction() {
       {showSquad && (
         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.98)', zIndex: 100, padding: '40px 20px', overflowY: 'auto' }}>
           <button onClick={() => setShowSquad(false)} style={{ float: 'right', background: 'none', border: 'none', color: '#e11d48', fontSize: '1.8rem', fontWeight: 'bold' }}>✕</button>
-          <h1 style={{ color: '#fbbf24' }}>My Squad</h1>
+          <h1 style={{ color: '#fbbf24', marginBottom: '30px' }}>My Squad</h1>
           <div style={{ marginTop: '20px' }}>
             {squadList.map((item, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '18px', borderBottom: '1px solid #222', background: '#0a0a0a', marginBottom: '5px', borderRadius: '8px' }}>
