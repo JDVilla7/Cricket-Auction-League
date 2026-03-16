@@ -5,7 +5,7 @@ export default function Admin() {
   const [pid, setPid] = useState('');
   const [phase, setPhase] = useState('Phase 1');
   const [liveBids, setLiveBids] = useState([]);
-  const [status, setStatus] = useState('Ready');
+  const [status, setStatus] = useState('System Online');
 
   const fetchBids = async () => {
     const { data } = await supabase
@@ -25,26 +25,25 @@ export default function Admin() {
 
   const pushPlayer = async () => {
     if (!pid) return alert("Enter Player ID!");
+    setStatus('Pushing...');
     const { error } = await supabase.from('active_auction').upsert({ id: 2, player_id: pid, status: 'bidding' });
-    if (!error) setStatus(`Pushing Player ${pid}...`);
+    if (!error) {
+      setStatus(`LIVE: Player ${pid}`);
+      alert(`Player ${pid} pushed successfully! Check owner screens.`);
+    } else {
+      alert("Error: " + error.message);
+    }
   };
 
   const handleSold = async (bid) => {
     const newBudget = (bid.league_owners?.budget || 0) - bid.bid_amount;
-    
-    // 1. Save Result with Phase
     const { error: resErr } = await supabase.from('auction_results').insert([{ 
       player_id: bid.player_id, owner_id: bid.owner_id, winning_bid: bid.bid_amount, phase: phase 
     }]);
-
-    // 2. Update Budget & Delete Bid
     await supabase.from('league_owners').update({ budget: newBudget }).eq('id', bid.owner_id);
     await supabase.from('bids_draft').delete().eq('id', bid.id);
 
-    if (!resErr) {
-      alert(`SOLD! ${bid.players?.name} to ${bid.league_owners?.team_name}`);
-      fetchBids();
-    }
+    if (!resErr) { alert("SOLD!"); fetchBids(); }
   };
 
   const resetTournament = async () => {
@@ -52,35 +51,30 @@ export default function Admin() {
     await supabase.from('auction_results').delete().neq('id', 0);
     await supabase.from('bids_draft').delete().neq('id', 0);
     await supabase.from('league_owners').update({ budget: 150 }).neq('id', 0);
-    alert("System Reset Complete!");
+    alert("Full Reset Done!");
+    fetchBids();
   };
 
   return (
-    <div style={{ background: '#0a0a0a', color: 'white', minHeight: '100vh', padding: '40px', fontFamily: 'sans-serif', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <h1 style={{ color: '#e11d48' }}>Admin Tower</h1>
-      
-      <div style={{ background: '#111', padding: '15px', borderRadius: '10px', marginBottom: '20px' }}>
-        <label>Current Round: </label>
-        <input value={phase} onChange={(e) => setPhase(e.target.value)} style={{ background:'#000', color:'#fff', border:'1px solid #444', padding:'5px' }} />
+    <div style={{ background: '#0a0a0a', color: 'white', minHeight: '100vh', padding: '40px', textAlign: 'center', fontFamily: 'sans-serif' }}>
+      <h1>Admin Control Tower</h1>
+      <p style={{ color: status.includes('LIVE') ? '#22c55e' : '#666' }}>● {status}</p>
+
+      <div style={{ background: '#111', padding: '20px', borderRadius: '10px', display: 'inline-block', marginBottom: '20px' }}>
+        <input type="number" placeholder="Player ID" onChange={(e) => setPid(e.target.value)} style={{ padding: '10px', width: '80px' }} />
+        <button onClick={pushPlayer} style={{ padding: '10px 20px', background: '#e11d48', color: '#fff', border: 'none', marginLeft: '10px', borderRadius: '5px', fontWeight: 'bold' }}>PUSH LIVE</button>
       </div>
 
-      <div style={{ width: '100%', maxWidth: '600px' }}>
-        <div style={{ background: '#111', padding: '25px', borderRadius: '12px', border: '1px solid #333', marginBottom: '20px', textAlign: 'center' }}>
-          <input type="number" placeholder="Player ID" onChange={(e) => setPid(e.target.value)} style={{ padding: '12px', borderRadius: '6px', width: '50%', marginRight: '10px' }} />
-          <button onClick={pushPlayer} style={{ padding: '12px 20px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold' }}>PUSH LIVE</button>
-        </div>
-
-        <div style={{ background: '#111', padding: '25px', borderRadius: '12px', border: '1px solid #333' }}>
-          <h2 style={{ color: '#fbbf24' }}>Bids for {phase}</h2>
-          {liveBids.map((bid) => (
-            <div key={bid.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 0', borderBottom: '1px solid #222' }}>
-              <span><strong>{bid.league_owners?.team_name}</strong> ({bid.bid_amount} Cr)</span>
-              <button onClick={() => handleSold(bid)} style={{ background: '#22c55e', border: 'none', padding: '8px 15px', borderRadius: '5px', fontWeight:'bold' }}>SOLD</button>
-            </div>
-          ))}
-        </div>
-        <button onClick={resetTournament} style={{ marginTop:'40px', background:'none', border:'none', color:'#444', cursor:'pointer' }}>Reset All Data</button>
+      <div style={{ maxWidth: '600px', margin: '0 auto', background: '#111', padding: '20px', borderRadius: '10px' }}>
+        <h3>Active Bids</h3>
+        {liveBids.length > 0 ? liveBids.map((bid) => (
+          <div key={bid.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '15px 0', borderBottom: '1px solid #222' }}>
+            <span><strong>{bid.league_owners?.team_name}</strong>: {bid.bid_amount} Cr</span>
+            <button onClick={() => handleSold(bid)} style={{ background: '#22c55e', color: '#000', padding: '5px 15px', border: 'none', borderRadius: '5px', fontWeight: 'bold' }}>SOLD</button>
+          </div>
+        )) : <p style={{color:'#444'}}>No bids yet...</p>}
       </div>
+      <button onClick={resetTournament} style={{ marginTop: '50px', color: '#444', background: 'none', border: 'none', cursor: 'pointer' }}>Wipe All Data</button>
     </div>
   );
 }
