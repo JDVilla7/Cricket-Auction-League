@@ -15,20 +15,14 @@ export default function Auction() {
   const sync = async () => {
     if (!id) return;
 
-    // 1. Fetch Owner & Active Status
+    // 1. Fetch Owner & Active Global Status
     const { data: owner } = await supabase.from('league_owners').select('*').eq('id', id).single();
     const { data: act } = await supabase.from('active_auction').select('*').eq('id', 2).single();
     
-    // 2. FETCH SQUAD - This is the fix for the "Empty Squad" issue
-    // We join the 'players' table to get the names
+    // 2. Fetch Squad with Name Join
     const { data: squad, count } = await supabase
       .from('auction_results')
-      .select(`
-        winning_bid,
-        players (
-          name
-        )
-      `)
+      .select(`winning_bid, player_id, players(name)`)
       .eq('owner_id', id);
 
     setSquadList(squad || []);
@@ -40,8 +34,7 @@ export default function Auction() {
         .order('bid_amount', { ascending: false }).limit(1).maybeSingle();
 
       setSt({
-        owner,
-        player,
+        owner, player,
         highBid: bid ? bid.bid_amount : (player.base_price / 10000000),
         bidderId: bid ? bid.owner_id : null,
         isSold: act.is_sold,
@@ -55,11 +48,7 @@ export default function Auction() {
   useEffect(() => {
     if (router.isReady) {
       sync();
-      // Listen for all changes - this ensures when Admin clicks SOLD, 
-      // the owner's squad list and counter update instantly.
-      const sub = supabase.channel('stadium_v5')
-        .on('postgres_changes', { event: '*', schema: 'public' }, sync)
-        .subscribe();
+      const sub = supabase.channel('stadium_final').on('postgres_changes', { event: '*', schema: 'public' }, sync).subscribe();
       return () => supabase.removeChannel(sub);
     }
   }, [router.isReady, id]);
@@ -68,10 +57,7 @@ export default function Auction() {
     if (st.isSold || String(st.bidderId) === String(id)) return;
     const next = st.bidderId ? st.highBid + 0.25 : st.highBid;
     if (next > st.owner.budget) return alert("Insufficient Budget!");
-    
-    await supabase.from('bids_draft').upsert({ 
-      owner_id: id, player_id: st.player.id, bid_amount: next 
-    }, { onConflict: 'owner_id,player_id' });
+    await supabase.from('bids_draft').upsert({ owner_id: id, player_id: st.player.id, bid_amount: next }, { onConflict: 'owner_id,player_id' });
   };
 
   if (!st.owner) return <div style={{ background: '#000', color: '#fff', height: '100dvh', display: 'grid', placeItems: 'center' }}>CONNECTING...</div>;
@@ -80,7 +66,7 @@ export default function Auction() {
   const slotsRemaining = 15 - st.squadCount;
 
   return (
-    <div style={{ background: '#050505', color: '#fff', height: '100dvh', width: '100vw', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', margin: 0, overflow: 'hidden', position: 'relative' }}>
+    <div style={{ background: '#050505', color: '#fff', height: '100dvh', width: '100vw', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', overflow: 'hidden', position: 'relative' }}>
       
       {/* HEADER */}
       <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', background: '#0a0a0a', borderBottom: '1px solid #222' }}>
@@ -96,7 +82,6 @@ export default function Auction() {
 
       {/* MAIN CONTENT */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', padding: '20px' }}>
-        
         {st.isSold ? (
           <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', animation: 'blink 0.6s infinite' }}>
             <h1 style={{ fontSize: '5rem', color: '#e11d48', fontWeight: '900', margin: '0' }}>SOLD!</h1>
@@ -109,57 +94,41 @@ export default function Auction() {
         ) : st.player ? (
           <div style={{ width: '100%' }}>
             <h1 style={{ fontSize: 'clamp(2.5rem, 10vw, 5rem)', margin: 0, fontWeight: '900', textTransform: 'uppercase' }}>{st.player.name}</h1>
-            <p style={{ color: '#fbbf24', fontSize: '1.1rem', margin: '10px 0' }}>BASE: {(st.player.base_price / 10000000).toFixed(2)} Cr</p>
-
+            <p style={{ color: '#fbbf24', fontSize: '1.1rem' }}>BASE: {(st.player.base_price / 10000000).toFixed(2)} Cr</p>
             <div style={{ background: '#111', margin: '30px auto', padding: '25px', borderRadius: '30px', border: '3px solid #fbbf24', maxWidth: '320px' }}>
                <p style={{ margin: 0, color: '#666', fontSize: '0.8rem', fontWeight: 'bold' }}>CURRENT PRICE</p>
                <h2 style={{ margin: 0, fontSize: '4.5rem', color: '#fbbf24', lineHeight: '1' }}>{st.highBid.toFixed(2)}</h2>
                <p style={{ margin: 0, color: '#fbbf24' }}>Crore</p>
             </div>
-
-            <button 
-              disabled={leading || st.isSold || slotsRemaining === 0}
-              onClick={placeBid}
-              style={{ width: '100%', maxWidth: '350px', padding: '20px', borderRadius: '15px', border: 'none', background: leading ? '#1a1a1a' : (slotsRemaining === 0 ? '#333' : '#e11d48'), color: '#fff', fontSize: '1.8rem', fontWeight: '900' }}
-            >
+            <button disabled={leading || st.isSold || slotsRemaining === 0} onClick={placeBid} style={{ width: '100%', maxWidth: '350px', padding: '20px', borderRadius: '15px', border: 'none', background: leading ? '#1a1a1a' : (slotsRemaining === 0 ? '#333' : '#e11d48'), color: '#fff', fontSize: '1.8rem', fontWeight: '900' }}>
               {slotsRemaining === 0 ? "SQUAD FULL" : leading ? "YOU LEAD" : `BID ${(st.bidderId ? st.highBid + 0.25 : st.highBid).toFixed(2)} Cr`}
             </button>
           </div>
-        ) : <h2 style={{color:'#333'}}>WAITING FOR NEXT PLAYER...</h2>}
+        ) : <h2 style={{color:'#333'}}>WAITING...</h2>}
       </div>
 
-      {/* VIEW SQUAD BUTTON */}
-      <button 
-        onClick={() => { sync(); setShowSquad(true); }}
-        style={{ padding: '15px', background: '#111', color: '#ccc', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold', cursor: 'pointer' }}
-      >
+      {/* FOOTER BUTTON */}
+      <button onClick={() => { sync(); setShowSquad(true); }} style={{ padding: '15px', background: '#111', color: '#ccc', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold' }}>
         📊 VIEW MY SQUAD ({st.squadCount})
       </button>
 
       {/* SQUAD MODAL */}
       {showSquad && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.98)', zIndex: 100, padding: '40px 20px', boxSizing: 'border-box', overflowY: 'auto' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.98)', zIndex: 100, padding: '40px 20px', overflowY: 'auto' }}>
           <button onClick={() => setShowSquad(false)} style={{ float: 'right', background: 'none', border: 'none', color: '#e11d48', fontSize: '1.8rem', fontWeight: 'bold' }}>✕</button>
-          <h1 style={{ color: '#fbbf24', marginBottom: '30px' }}>My Squad</h1>
+          <h1 style={{ color: '#fbbf24' }}>My Squad</h1>
           <div style={{ marginTop: '20px' }}>
-            {squadList.length > 0 ? squadList.map((item, i) => (
+            {squadList.map((item, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '18px', borderBottom: '1px solid #222', background: '#0a0a0a', marginBottom: '5px', borderRadius: '8px' }}>
-                <span style={{ fontSize: '1.1rem', fontWeight: '500' }}>{item.players?.name}</span>
+                <span style={{ fontSize: '1.1rem' }}>{item.players?.name || `Player ID: ${item.player_id}`}</span>
                 <span style={{ color: '#22c55e', fontWeight: 'bold' }}>{item.winning_bid.toFixed(2)} Cr</span>
               </div>
-            )) : <p style={{color:'#444', textAlign: 'center'}}>No players in your squad yet.</p>}
-          </div>
-          <div style={{ marginTop: '40px', padding: '20px', borderTop: '1px solid #333', textAlign: 'center' }}>
-            <p style={{ margin: 0, color: '#666', fontSize: '1.1rem' }}>Total Spent: {(150 - st.owner.budget).toFixed(2)} Cr</p>
-            <p style={{ margin: '5px 0 0 0', color: '#444', fontSize: '0.8rem' }}>Slots Remaining: {slotsRemaining}</p>
+            ))}
           </div>
         </div>
       )}
 
-      <style jsx global>{`
-        @keyframes blink { 50% { opacity: 0.5; } }
-        body { margin: 0; padding: 0; background: #050505; }
-      `}</style>
+      <style jsx global>{` @keyframes blink { 50% { opacity: 0.5; } } body { margin: 0; background: #050505; } `}</style>
     </div>
   );
 }
