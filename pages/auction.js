@@ -1,4 +1,3 @@
-/* pages/auction.js */
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabaseClient';
@@ -8,7 +7,6 @@ export default function Auction() {
   const { id } = router.query;
   const [owner, setOwner] = useState(null);
   const [activePlayer, setActivePlayer] = useState(null);
-  const [bidValue, setBidValue] = useState('');
   const [currentHighBid, setCurrentHighBid] = useState(0);
 
   const fetchData = async () => {
@@ -16,21 +14,16 @@ export default function Auction() {
     const { data: oData } = await supabase.from('league_owners').select('*').eq('id', id).single();
     setOwner(oData);
 
-    const { data: auctionRow } = await supabase.from('active_auction').select('*').eq('id', 2).maybeSingle();
-    if (auctionRow?.player_id) {
-      const { data: pData } = await supabase.from('players').select('*').eq('id', auctionRow.player_id).single();
-      setActivePlayer(pData);
+    const { data: auction } = await supabase.from('active_auction').select('*').eq('id', 2).maybeSingle();
+    if (auction?.player_id) {
+      const { data: p } = await supabase.from('players').select('*').eq('id', auction.player_id).single();
+      setActivePlayer(p);
 
-      // Fetch the MAX bid for this player to show everyone
-      const { data: highBid } = await supabase
-        .from('bids_draft')
-        .select('bid_amount')
-        .eq('player_id', auctionRow.player_id)
-        .order('bid_amount', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data: high } = await supabase.from('bids_draft').select('bid_amount').eq('player_id', auction.player_id).order('bid_amount', { ascending: false }).limit(1).maybeSingle();
       
-      setCurrentHighBid(highBid ? highBid.bid_amount : 0);
+      // If no bid yet, start at Base Price
+      const baseCr = p.base_price / 10000000;
+      setCurrentHighBid(high ? high.bid_amount : baseCr);
     } else {
       setActivePlayer(null);
     }
@@ -38,47 +31,51 @@ export default function Auction() {
 
   useEffect(() => {
     if (router.isReady) fetchData();
-    const channel = supabase.channel('room-sync').on('postgres_changes', { event: '*', schema: 'public', table: 'bids_draft' }, fetchData).on('postgres_changes', { event: '*', schema: 'public', table: 'active_auction' }, fetchData).subscribe();
+    const channel = supabase.channel('live').on('postgres_changes', { event: '*', schema: 'public', table: 'bids_draft' }, fetchData).on('postgres_changes', { event: '*', schema: 'public', table: 'active_auction' }, fetchData).subscribe();
     return () => supabase.removeChannel(channel);
   }, [router.isReady, id]);
 
-  const placeBid = async () => {
-    const val = parseFloat(bidValue);
-    if (val <= currentHighBid) return alert("Bid must be higher than current high bid!");
-    if (val > owner.budget) return alert("Insufficient budget!");
+  const placeIncrementBid = async () => {
+    // IPL Increment Logic: +0.25 Cr
+    const nextBid = currentHighBid + 0.25;
+    
+    if (nextBid > owner.budget) return alert("Not enough budget!");
 
     await supabase.from('bids_draft').upsert({
       owner_id: owner.id,
       player_id: activePlayer.id,
-      bid_amount: val
+      bid_amount: nextBid
     }, { onConflict: 'owner_id,player_id' });
-    setBidValue('');
   };
 
-  if (!owner) return <div style={{background:'#000', color:'#fff', height:'100vh', padding:'20px'}}>Loading...</div>;
+  if (!owner) return <div style={{background:'#000', color:'#fff', height:'100vh'}}>Connecting...</div>;
 
   return (
-    <div style={{ backgroundColor: '#0a0a0a', color: 'white', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif', textAlign:'center' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #e11d48', paddingBottom: '10px' }}>
-        <h2 style={{color:'#e11d48'}}>{owner.team_name}</h2>
+    <div style={{ backgroundColor: '#0a0a0a', color: 'white', minHeight: '100vh', padding: '20px', textAlign: 'center' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #e11d48', paddingBottom: '10px' }}>
+        <h2>{owner.team_name}</h2>
         <h2 style={{color:'#22c55e'}}>{owner.budget.toFixed(2)} Cr Left</h2>
-      </div>
+      </header>
 
       {activePlayer ? (
-        <div style={{marginTop: '40px'}}>
-          <h1 style={{fontSize:'3rem'}}>{activePlayer.name}</h1>
-          <div style={{ background: '#111', padding: '20px', borderRadius: '15px', display: 'inline-block', margin: '20px 0', border: '2px solid #fbbf24' }}>
-            <p style={{ margin: 0, color: '#666' }}>CURRENT HIGH BID</p>
-            <h2 style={{ margin: 0, color: '#fbbf24', fontSize: '3rem' }}>{currentHighBid.toFixed(2)} Cr</h2>
+        <div style={{ marginTop: '40px' }}>
+          <h1 style={{ fontSize: '3.5rem', margin: 0 }}>{activePlayer.name}</h1>
+          <p style={{ color: '#666' }}>{activePlayer.type} | Base: {(activePlayer.base_price / 10000000).toFixed(2)} Cr</p>
+          
+          <div style={{ background: '#111', padding: '25px', borderRadius: '15px', border: '2px solid #fbbf24', margin: '30px 0' }}>
+            <p style={{ margin: 0, color: '#666' }}>CURRENT BID</p>
+            <h2 style={{ fontSize: '4rem', margin: 0, color: '#fbbf24' }}>{currentHighBid.toFixed(2)} Cr</h2>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '10px' }}>
-            <input type="number" step="0.1" value={bidValue} onChange={(e) => setBidValue(e.target.value)} style={{ padding: '15px', width: '100px', borderRadius: '8px' }} placeholder="Your Bid" />
-            <button onClick={placeBid} style={{ padding: '15px 30px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold' }}>BID</button>
-          </div>
+          <button 
+            onClick={placeIncrementBid} 
+            style={{ width: '100%', padding: '20px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1.5rem', fontWeight: 'bold' }}
+          >
+            BID {(currentHighBid + 0.25).toFixed(2)} Cr
+          </button>
         </div>
       ) : (
-        <h3 style={{marginTop:'100px', color:'#444'}}>Waiting for Next Player...</h3>
+        <h3 style={{marginTop:'100px', color:'#444'}}>Next player coming soon...</h3>
       )}
     </div>
   );
