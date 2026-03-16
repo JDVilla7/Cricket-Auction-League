@@ -16,30 +16,33 @@ export default function Auction() {
   const sync = async () => {
     if (!id) return;
 
-    // 1. Fetch Owner and Squad Details
+    // 1. HARD RESET LOCAL STATE (This kills the "ghost players" bug)
+    setSquadList([]); 
+
+    // 2. Fetch Owner & Fresh Squad Data
     const { data: owner } = await supabase.from('league_owners').select('*').eq('id', id).single();
     const { data: squad, count } = await supabase
       .from('auction_results')
       .select('winning_bid, player_id, players(name)', { count: 'exact' })
       .eq('owner_id', id);
 
-    // Explicitly clear squad list if database is empty (Fixes the Reset bug)
-    const freshSquadList = squad && squad.length > 0 ? squad : [];
-    const freshCount = count || 0;
-    setSquadList(freshSquadList);
+    // 3. Update Squad State based on fresh DB results
+    const actualSquad = squad && squad.length > 0 ? squad : [];
+    const actualCount = count || 0;
+    setSquadList(actualSquad);
 
-    // 2. Fetch Active Auction Status
+    // 4. Fetch Active Auction Status
     const { data: act } = await supabase.from('active_auction').select('*').eq('id', 2).single();
     
-    // 3. Trigger Confetti only if this specific owner won
+    // 5. Confetti Logic
     if (act?.is_sold && act.winner_name === owner?.team_name) {
       confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 }, zIndex: 999 });
     }
 
-    // 4. Build the new state object
-    let newState = {
+    // 6. Final State Construction (Ensures squadCount is always fresh)
+    let finalState = {
       owner,
-      squadCount: freshCount,
+      squadCount: actualCount,
       player: null,
       highBid: 0,
       bidderId: null,
@@ -54,8 +57,8 @@ export default function Auction() {
         .select('*').eq('player_id', act.player_id)
         .order('bid_amount', { ascending: false }).limit(1).maybeSingle();
 
-      newState = {
-        ...newState,
+      finalState = {
+        ...finalState,
         player: p,
         highBid: b ? b.bid_amount : (p.base_price / 10000000),
         bidderId: b ? b.owner_id : null,
@@ -65,27 +68,26 @@ export default function Auction() {
       };
     }
 
-    setSt(newState);
+    setSt(finalState);
   };
 
   useEffect(() => {
     if (router.isReady) {
       sync();
+      // Listen for all database events
       const sub = supabase.channel(`stadium_final_${id}`).on('postgres_changes', { event: '*', schema: 'public' }, sync).subscribe();
       return () => supabase.removeChannel(sub);
     }
   }, [router.isReady, id]);
 
   const placeBid = async () => {
-    if (st.isSold || String(st.bidderId) === String(id)) return;
+    if (st.isSold || String(st.bidderId) === String(id) || !st.player) return;
     const next = st.bidderId ? st.highBid + 0.25 : st.highBid;
     if (next > st.owner.budget) return alert("Insufficient Budget!");
     await supabase.from('bids_draft').upsert({ owner_id: id, player_id: st.player.id, bid_amount: next }, { onConflict: 'owner_id,player_id' });
   };
 
   if (!st.owner) return <div style={{ background: '#000', color: '#fff', height: '100dvh', display: 'grid', placeItems: 'center' }}>CONNECTING...</div>;
-
-  const leading = String(st.bidderId) === String(id);
 
   return (
     <div style={{ background: '#050505', color: '#fff', height: '100dvh', width: '100vw', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', margin: 0, overflow: 'hidden', position: 'relative' }}>
@@ -102,7 +104,7 @@ export default function Auction() {
         </div>
       </div>
 
-      {/* CONTENT - FLEX CENTERED */}
+      {/* MAIN CONTENT */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', padding: '20px' }}>
         {st.isSold ? (
           <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', animation: 'blink 0.6s infinite' }}>
@@ -124,15 +126,15 @@ export default function Auction() {
                <p style={{ margin: 0, color: '#fbbf24' }}>Crore</p>
             </div>
 
-            <button disabled={leading || st.isSold} onClick={placeBid} style={{ width: '100%', maxWidth: '350px', padding: '20px', borderRadius: '15px', border: 'none', background: leading ? '#1a1a1a' : '#e11d48', color: '#fff', fontSize: '1.8rem', fontWeight: '900' }}>
-              {leading ? "YOU LEAD" : `BID ${(st.bidderId ? st.highBid + 0.25 : st.highBid).toFixed(2)} Cr`}
+            <button disabled={String(st.bidderId) === String(id) || st.isSold} onClick={placeBid} style={{ width: '100%', maxWidth: '350px', padding: '20px', borderRadius: '15px', border: 'none', background: String(st.bidderId) === String(id) ? '#1a1a1a' : '#e11d48', color: '#fff', fontSize: '1.8rem', fontWeight: '900' }}>
+              {String(st.bidderId) === String(id) ? "YOU LEAD" : `BID ${(st.bidderId ? st.highBid + 0.25 : st.highBid).toFixed(2)} Cr`}
             </button>
           </div>
         ) : <h2 style={{color:'#333'}}>WAITING FOR NEXT PLAYER...</h2>}
       </div>
 
       {/* FOOTER BUTTON */}
-      <button onClick={() => { sync(); setShowSquad(true); }} style={{ padding: '15px', background: '#111', color: '#ccc', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold' }}>
+      <button onClick={() => { sync(); setShowSquad(true); }} style={{ padding: '15px', background: '#111', color: '#ccc', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold', cursor: 'pointer' }}>
         📊 VIEW MY SQUAD ({st.squadCount})
       </button>
 
