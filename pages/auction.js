@@ -9,6 +9,8 @@ export default function Auction() {
     owner: null, player: null, highBid: 0, bidderId: null, 
     isSold: false, winName: '', winAmt: 0, squadCount: 0 
   });
+  const [squadList, setSquadList] = useState([]);
+  const [showSquad, setShowSquad] = useState(false);
 
   const sync = async () => {
     if (!id) return;
@@ -17,11 +19,13 @@ export default function Auction() {
     const { data: owner } = await supabase.from('league_owners').select('*').eq('id', id).single();
     const { data: act } = await supabase.from('active_auction').select('*').eq('id', 2).single();
     
-    // 2. Count how many players this team already bought
-    const { count } = await supabase
+    // 2. Fetch Squad Details
+    const { data: squad, count } = await supabase
       .from('auction_results')
-      .select('*', { count: 'exact', head: true })
+      .select('winning_bid, players(name)')
       .eq('owner_id', id);
+
+    setSquadList(squad || []);
 
     if (act?.player_id) {
       const { data: player } = await supabase.from('players').select('*').eq('id', act.player_id).single();
@@ -45,7 +49,6 @@ export default function Auction() {
   useEffect(() => {
     if (router.isReady) {
       sync();
-      // Listen for ANY changes (bids, sales, new player pushes)
       const sub = supabase.channel('stadium').on('postgres_changes', { event: '*', schema: 'public' }, sync).subscribe();
       return () => supabase.removeChannel(sub);
     }
@@ -57,39 +60,36 @@ export default function Auction() {
     if (next > st.owner.budget) return alert("Insufficient Budget!");
     
     await supabase.from('bids_draft').upsert({ 
-      owner_id: id, 
-      player_id: st.player.id, 
-      bid_amount: next 
+      owner_id: id, player_id: st.player.id, bid_amount: next 
     }, { onConflict: 'owner_id,player_id' });
   };
 
-  if (!st.owner) return <div style={{ background: '#000', color: '#fff', height: '100dvh', display: 'grid', placeItems: 'center' }}>STADIUM CONNECTING...</div>;
+  if (!st.owner) return <div style={{ background: '#000', color: '#fff', height: '100dvh', display: 'grid', placeItems: 'center' }}>CONNECTING...</div>;
 
   const leading = String(st.bidderId) === String(id);
-  const TOTAL_SLOTS = 15; // <--- CHANGE THIS IF YOUR LEAGUE HAS MORE/LESS SLOTS
-  const slotsRemaining = TOTAL_SLOTS - st.squadCount;
+  const slotsRemaining = 15 - st.squadCount;
 
   return (
-    <div style={{ background: '#050505', color: '#fff', height: '100dvh', width: '100vw', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', margin: 0, overflow: 'hidden' }}>
+    <div style={{ background: '#050505', color: '#fff', height: '100dvh', width: '100vw', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', margin: 0, overflow: 'hidden', position: 'relative' }}>
       
-      {/* HEADER WITH SLOTS */}
+      {/* HEADER */}
       <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', background: '#0a0a0a', borderBottom: '1px solid #222' }}>
         <div style={{ textAlign: 'left' }}>
           <h2 style={{ margin: 0, color: '#e11d48', fontSize: '1rem' }}>{st.owner.team_name}</h2>
-          <div style={{ color: '#666', fontSize: '0.7rem', fontWeight: 'bold' }}>SLOTS: {st.squadCount} / {TOTAL_SLOTS}</div>
+          <div style={{ color: '#666', fontSize: '0.7rem', fontWeight: 'bold' }}>SLOTS: {st.squadCount} / 15</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0, color: '#22c55e', fontSize: '1.2rem' }}>{st.owner.budget.toFixed(2)} Cr</h2>
-          <div style={{ color: '#444', fontSize: '0.6rem' }}>SLOTS LEFT: {slotsRemaining}</div>
+          <div style={{ color: '#444', fontSize: '0.6rem' }}>REMAINING</div>
         </div>
       </div>
 
-      {/* CONTENT AREA */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
+      {/* MAIN CONTENT - FIXED CENTERING */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', padding: '20px' }}>
         
         {st.isSold ? (
-          <div style={{ textAlign: 'center', animation: 'blink 0.6s infinite' }}>
-            <h1 style={{ fontSize: '5rem', color: '#e11d48', fontWeight: '900', margin: 0 }}>SOLD!</h1>
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', animation: 'blink 0.6s infinite' }}>
+            <h1 style={{ fontSize: '5rem', color: '#e11d48', fontWeight: '900', margin: '0 auto', textAlign: 'center', width: '100%' }}>SOLD!</h1>
             <div style={{ background: '#111', padding: '30px', borderRadius: '20px', border: '1px solid #333', marginTop: '20px', width: '100%', maxWidth: '350px' }}>
                 <h2 style={{ margin: 0 }}>{st.player?.name}</h2>
                 <p style={{ color: '#fbbf24', fontSize: '1.2rem', margin: '10px 0' }}>TO {st.winName}</p>
@@ -97,8 +97,8 @@ export default function Auction() {
             </div>
           </div>
         ) : st.player ? (
-          <div style={{ width: '100%', textAlign: 'center' }}>
-            <h1 style={{ fontSize: 'clamp(3rem, 12vw, 5rem)', margin: 0, fontWeight: '900', textTransform: 'uppercase' }}>{st.player.name}</h1>
+          <div style={{ width: '100%' }}>
+            <h1 style={{ fontSize: 'clamp(2.5rem, 10vw, 5rem)', margin: 0, fontWeight: '900', textTransform: 'uppercase' }}>{st.player.name}</h1>
             <p style={{ color: '#fbbf24', fontSize: '1.1rem', margin: '10px 0' }}>BASE: {(st.player.base_price / 10000000).toFixed(2)} Cr</p>
 
             <div style={{ background: '#111', margin: '30px auto', padding: '25px', borderRadius: '30px', border: '3px solid #fbbf24', maxWidth: '320px' }}>
@@ -117,6 +117,33 @@ export default function Auction() {
           </div>
         ) : <h2 style={{color:'#333'}}>WAITING FOR NEXT PLAYER...</h2>}
       </div>
+
+      {/* VIEW SQUAD BUTTON */}
+      <button 
+        onClick={() => setShowSquad(true)}
+        style={{ padding: '15px', background: '#111', color: '#666', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold', cursor: 'pointer' }}
+      >
+        📊 VIEW MY SQUAD ({st.squadCount})
+      </button>
+
+      {/* SQUAD MODAL OVERLAY */}
+      {showSquad && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.95)', zIndex: 100, padding: '40px 20px', boxSizing: 'border-box', overflowY: 'auto' }}>
+          <button onClick={() => setShowSquad(false)} style={{ float: 'right', background: 'none', border: 'none', color: '#e11d48', fontSize: '1.5rem', fontWeight: 'bold' }}>CLOSE ✕</button>
+          <h1 style={{ color: '#fbbf24' }}>My Squad</h1>
+          <div style={{ marginTop: '20px' }}>
+            {squadList.length > 0 ? squadList.map((p, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '15px', borderBottom: '1px solid #222' }}>
+                <span style={{ fontSize: '1.1rem' }}>{p.players?.name}</span>
+                <span style={{ color: '#22c55e', fontWeight: 'bold' }}>{p.winning_bid.toFixed(2)} Cr</span>
+              </div>
+            )) : <p style={{color:'#444'}}>No players bought yet.</p>}
+          </div>
+          <div style={{ marginTop: '30px', padding: '20px', borderTop: '1px solid #333', textAlign: 'center' }}>
+            <p style={{ margin: 0, color: '#666' }}>Total Spent: {(150 - st.owner.budget).toFixed(2)} Cr</p>
+          </div>
+        </div>
+      )}
 
       <style jsx global>{`
         @keyframes blink { 50% { opacity: 0.5; } }
