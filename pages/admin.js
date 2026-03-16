@@ -23,31 +23,47 @@ export default function Admin() {
     return () => supabase.removeChannel(sub);
   }, []);
 
+  // --- AGGRESSIVE RESET LOGIC ---
   const resetTournament = async () => {
-    if(!confirm("Wipe ALL data and reset budgets to 150 Cr? This cannot be undone.")) return;
-    await supabase.from('auction_results').delete().neq('id', 0);
-    await supabase.from('bids_draft').delete().neq('id', 0);
-    await supabase.from('league_owners').update({ budget: 150 }).neq('id', 0);
-    await supabase.from('active_auction').update({ player_id: null, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
-    alert("System Reset Successfully!");
+    if(!confirm("WARNING: This will delete ALL players from ALL squads and reset budgets to 150 Cr. Proceed?")) return;
+    
+    // 1. Force delete all results (using .gte('id', 0) to ensure every row is hit)
+    const { error: err1 } = await supabase.from('auction_results').delete().gte('id', 0);
+    const { error: err2 } = await supabase.from('bids_draft').delete().gte('id', 0);
+    
+    // 2. Reset budgets
+    const { error: err3 } = await supabase.from('league_owners').update({ budget: 150 }).gte('id', 0);
+    
+    // 3. Clear the active auction control row
+    const { error: err4 } = await supabase.from('active_auction').update({ 
+      player_id: null, is_sold: false, winner_name: '', winning_amount: 0 
+    }).eq('id', 2);
+
+    if (err1 || err2 || err3 || err4) {
+      console.error("Reset Errors:", { err1, err2, err3, err4 });
+      alert("Partial Reset Failed. Please run the SQL manual wipe or check Supabase Permissions.");
+    } else {
+      alert("TOURNAMENT WIPED. All squads are now empty.");
+      syncAdmin(); // Refresh local admin view
+    }
   };
 
   const createOwner = async () => {
     if(!ownerName) return;
     const { data, error } = await supabase.from('league_owners').insert([{ team_name: ownerName, budget: 150 }]).select();
-    if(!error) alert(`Team Added! Owner ID: ${data[0].id}`);
+    if(!error) alert(`Owner Created! Team: ${data[0].team_name}`);
     setOwnerName('');
   };
 
   const pushPlayer = async () => {
     if (!pid) return;
     await supabase.from('active_auction').update({ player_id: pid, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
-    await supabase.from('bids_draft').delete().neq('id', 0);
+    await supabase.from('bids_draft').delete().gte('id', 0);
     setPid('');
   };
 
   const handleSold = async (bid) => {
-    if(!confirm(`Finalize Sale: ${data.player.name} to ${bid.league_owners.team_name}?`)) return;
+    if(!confirm(`Sell ${data.player.name} to ${bid.league_owners.team_name}?`)) return;
     await supabase.from('auction_results').insert([{ player_id: bid.player_id, owner_id: bid.owner_id, winning_bid: bid.bid_amount }]);
     await supabase.from('league_owners').update({ budget: bid.league_owners.budget - bid.bid_amount }).eq('id', bid.owner_id);
     await supabase.from('active_auction').update({ is_sold: true, winner_name: bid.league_owners.team_name, winning_amount: bid.bid_amount }).eq('id', 2);
@@ -55,20 +71,21 @@ export default function Admin() {
   };
 
   return (
-    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '30px', fontFamily: 'sans-serif', textAlign: 'center' }}>
-      <h1>AUCTION CONTROL TOWER</h1>
+    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '30px', textAlign: 'center', fontFamily: 'sans-serif' }}>
+      <h1 style={{color: '#e11d48'}}>AUCTION CONTROL TOWER</h1>
       
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', maxWidth: '1000px', margin: '0 auto 40px auto' }}>
         <div style={{ background: '#111', padding: '20px', borderRadius: '15px', border: '1px solid #333' }}>
-          <h3>TEAM SETUP</h3>
-          <input value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="Team Name" style={{ padding: '10px' }} />
-          <button onClick={createOwner} style={{ padding: '10px 20px', background: '#22c55e', border: 'none', marginLeft: '5px', fontWeight: 'bold' }}>ADD</button>
-          <button onClick={resetTournament} style={{ display: 'block', width: '100%', marginTop: '20px', padding: '15px', background: '#e11d48', border: 'none', color: '#fff', fontWeight: 'bold', borderRadius: '5px' }}>RESET TOURNAMENT (WIPE ALL)</button>
+          <h3>TOURNAMENT SETUP</h3>
+          <input value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="New Team Name" style={{ padding: '10px', borderRadius: '5px' }} />
+          <button onClick={createOwner} style={{ padding: '10px 20px', background: '#22c55e', border: 'none', marginLeft: '5px', fontWeight: 'bold', borderRadius: '5px' }}>ADD TEAM</button>
+          <hr style={{margin: '20px 0', borderColor: '#222'}} />
+          <button onClick={resetTournament} style={{ width: '100%', padding: '15px', background: '#e11d48', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}>RESET ENTIRE TOURNAMENT</button>
         </div>
 
         <div style={{ background: '#111', padding: '20px', borderRadius: '15px', border: '1px solid #333' }}>
           <h3>LIVE PUSH</h3>
-          <input value={pid} onChange={e => setPid(e.target.value)} placeholder="Player ID" style={{ padding: '15px', width: '80px', textAlign: 'center' }} />
+          <input value={pid} onChange={e => setPid(e.target.value)} placeholder="PID" style={{ padding: '15px', width: '80px', textAlign: 'center', borderRadius: '5px' }} />
           <button onClick={pushPlayer} style={{ padding: '15px 30px', background: '#fbbf24', border: 'none', marginLeft: '10px', fontWeight: 'bold', borderRadius: '5px' }}>PUSH PLAYER</button>
         </div>
       </div>
@@ -76,25 +93,23 @@ export default function Admin() {
       {data.isSold ? (
         <div style={{ padding: '60px', background: '#0a0a0a', border: '2px dashed #22c55e', borderRadius: '20px', maxWidth: '600px', margin: '0 auto' }}>
           <h1 style={{ color: '#22c55e', fontSize: '4rem', margin: 0 }}>SOLD!</h1>
-          <h2 style={{ margin: '10px 0' }}>{data.winner?.league_owners?.team_name}</h2>
-          <p style={{ color: '#666' }}>Sign next player above to clear this screen.</p>
+          <h2>{data.winner?.league_owners?.team_name}</h2>
+          <p style={{ color: '#666' }}>Push next player to clear.</p>
         </div>
       ) : data.player ? (
         <div style={{ background: '#111', padding: '40px', borderRadius: '30px', border: '1px solid #444', maxWidth: '800px', margin: '0 auto' }}>
-          <h1 style={{ fontSize: '3rem', margin: 0 }}>{data.player.name}</h1>
-          <h2 style={{ fontSize: '5rem', color: '#fbbf24', margin: '20px 0' }}>
-            {data.bids[0] ? data.bids[0].bid_amount.toFixed(2) : (data.player.base_price/10000000).toFixed(2)} Cr
-          </h2>
+          <h1>{data.player.name}</h1>
+          <h2 style={{ fontSize: '5rem', color: '#fbbf24' }}>{data.bids[0] ? data.bids[0].bid_amount.toFixed(2) : (data.player.base_price/10000000).toFixed(2)} Cr</h2>
           <div style={{ textAlign: 'left', marginTop: '40px' }}>
             {data.bids.map(b => (
               <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '20px', background: '#000', marginBottom: '10px', borderRadius: '15px', alignItems: 'center' }}>
                 <span style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{b.league_owners.team_name}</span>
-                <button onClick={() => handleSold(b)} style={{ background: '#22c55e', border: 'none', padding: '10px 30px', borderRadius: '8px', fontWeight: 'bold', fontSize: '1.1rem' }}>SOLD AT {b.bid_amount.toFixed(2)}</button>
+                <button onClick={() => handleSold(b)} style={{ background: '#22c55e', border: 'none', padding: '10px 30px', borderRadius: '8px', fontWeight: 'bold' }}>SOLD AT {b.bid_amount.toFixed(2)}</button>
               </div>
             ))}
           </div>
         </div>
-      ) : <h1 style={{ color: '#333', marginTop: '100px' }}>WAITING FOR PLAYER ID...</h1>}
+      ) : <h1 style={{ color: '#222', marginTop: '100px' }}>READY...</h1>}
     </div>
   );
 }
