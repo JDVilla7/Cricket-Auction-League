@@ -19,10 +19,16 @@ export default function Auction() {
     const { data: owner } = await supabase.from('league_owners').select('*').eq('id', id).single();
     const { data: act } = await supabase.from('active_auction').select('*').eq('id', 2).single();
     
-    // 2. Fetch Squad Details
+    // 2. FETCH SQUAD - This is the fix for the "Empty Squad" issue
+    // We join the 'players' table to get the names
     const { data: squad, count } = await supabase
       .from('auction_results')
-      .select('winning_bid, players(name)')
+      .select(`
+        winning_bid,
+        players (
+          name
+        )
+      `)
       .eq('owner_id', id);
 
     setSquadList(squad || []);
@@ -49,7 +55,11 @@ export default function Auction() {
   useEffect(() => {
     if (router.isReady) {
       sync();
-      const sub = supabase.channel('stadium').on('postgres_changes', { event: '*', schema: 'public' }, sync).subscribe();
+      // Listen for all changes - this ensures when Admin clicks SOLD, 
+      // the owner's squad list and counter update instantly.
+      const sub = supabase.channel('stadium_v5')
+        .on('postgres_changes', { event: '*', schema: 'public' }, sync)
+        .subscribe();
       return () => supabase.removeChannel(sub);
     }
   }, [router.isReady, id]);
@@ -76,7 +86,7 @@ export default function Auction() {
       <div style={{ padding: '15px 20px', display: 'flex', justifyContent: 'space-between', background: '#0a0a0a', borderBottom: '1px solid #222' }}>
         <div style={{ textAlign: 'left' }}>
           <h2 style={{ margin: 0, color: '#e11d48', fontSize: '1rem' }}>{st.owner.team_name}</h2>
-          <div style={{ color: '#666', fontSize: '0.7rem', fontWeight: 'bold' }}>SLOTS: {st.squadCount} / 15</div>
+          <div style={{ color: '#666', fontSize: '0.7rem', fontWeight: 'bold' }}>SQUAD: {st.squadCount} / 15</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0, color: '#22c55e', fontSize: '1.2rem' }}>{st.owner.budget.toFixed(2)} Cr</h2>
@@ -84,12 +94,12 @@ export default function Auction() {
         </div>
       </div>
 
-      {/* MAIN CONTENT - FIXED CENTERING */}
+      {/* MAIN CONTENT */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', padding: '20px' }}>
         
         {st.isSold ? (
           <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', animation: 'blink 0.6s infinite' }}>
-            <h1 style={{ fontSize: '5rem', color: '#e11d48', fontWeight: '900', margin: '0 auto', textAlign: 'center', width: '100%' }}>SOLD!</h1>
+            <h1 style={{ fontSize: '5rem', color: '#e11d48', fontWeight: '900', margin: '0' }}>SOLD!</h1>
             <div style={{ background: '#111', padding: '30px', borderRadius: '20px', border: '1px solid #333', marginTop: '20px', width: '100%', maxWidth: '350px' }}>
                 <h2 style={{ margin: 0 }}>{st.player?.name}</h2>
                 <p style={{ color: '#fbbf24', fontSize: '1.2rem', margin: '10px 0' }}>TO {st.winName}</p>
@@ -120,27 +130,28 @@ export default function Auction() {
 
       {/* VIEW SQUAD BUTTON */}
       <button 
-        onClick={() => setShowSquad(true)}
-        style={{ padding: '15px', background: '#111', color: '#666', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold', cursor: 'pointer' }}
+        onClick={() => { sync(); setShowSquad(true); }}
+        style={{ padding: '15px', background: '#111', color: '#ccc', border: 'none', borderTop: '1px solid #222', fontSize: '0.9rem', fontWeight: 'bold', cursor: 'pointer' }}
       >
         📊 VIEW MY SQUAD ({st.squadCount})
       </button>
 
-      {/* SQUAD MODAL OVERLAY */}
+      {/* SQUAD MODAL */}
       {showSquad && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.95)', zIndex: 100, padding: '40px 20px', boxSizing: 'border-box', overflowY: 'auto' }}>
-          <button onClick={() => setShowSquad(false)} style={{ float: 'right', background: 'none', border: 'none', color: '#e11d48', fontSize: '1.5rem', fontWeight: 'bold' }}>CLOSE ✕</button>
-          <h1 style={{ color: '#fbbf24' }}>My Squad</h1>
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.98)', zIndex: 100, padding: '40px 20px', boxSizing: 'border-box', overflowY: 'auto' }}>
+          <button onClick={() => setShowSquad(false)} style={{ float: 'right', background: 'none', border: 'none', color: '#e11d48', fontSize: '1.8rem', fontWeight: 'bold' }}>✕</button>
+          <h1 style={{ color: '#fbbf24', marginBottom: '30px' }}>My Squad</h1>
           <div style={{ marginTop: '20px' }}>
-            {squadList.length > 0 ? squadList.map((p, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '15px', borderBottom: '1px solid #222' }}>
-                <span style={{ fontSize: '1.1rem' }}>{p.players?.name}</span>
-                <span style={{ color: '#22c55e', fontWeight: 'bold' }}>{p.winning_bid.toFixed(2)} Cr</span>
+            {squadList.length > 0 ? squadList.map((item, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '18px', borderBottom: '1px solid #222', background: '#0a0a0a', marginBottom: '5px', borderRadius: '8px' }}>
+                <span style={{ fontSize: '1.1rem', fontWeight: '500' }}>{item.players?.name}</span>
+                <span style={{ color: '#22c55e', fontWeight: 'bold' }}>{item.winning_bid.toFixed(2)} Cr</span>
               </div>
-            )) : <p style={{color:'#444'}}>No players bought yet.</p>}
+            )) : <p style={{color:'#444', textAlign: 'center'}}>No players in your squad yet.</p>}
           </div>
-          <div style={{ marginTop: '30px', padding: '20px', borderTop: '1px solid #333', textAlign: 'center' }}>
-            <p style={{ margin: 0, color: '#666' }}>Total Spent: {(150 - st.owner.budget).toFixed(2)} Cr</p>
+          <div style={{ marginTop: '40px', padding: '20px', borderTop: '1px solid #333', textAlign: 'center' }}>
+            <p style={{ margin: 0, color: '#666', fontSize: '1.1rem' }}>Total Spent: {(150 - st.owner.budget).toFixed(2)} Cr</p>
+            <p style={{ margin: '5px 0 0 0', color: '#444', fontSize: '0.8rem' }}>Slots Remaining: {slotsRemaining}</p>
           </div>
         </div>
       )}
