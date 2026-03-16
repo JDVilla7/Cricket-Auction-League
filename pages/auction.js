@@ -5,54 +5,51 @@ export default function Auction() {
   const [owner, setOwner] = useState(null);
   const [activePlayer, setActivePlayer] = useState(null);
   const [bidValue, setBidValue] = useState('');
+  const [myCurrentBid, setMyCurrentBid] = useState(null);
 
-  const fetchOwner = async () => {
-    const { data } = await supabase.from('league_owners').select('*').single();
-    setOwner(data);
-  };
+  const fetchData = async () => {
+    const { data: ownerData } = await supabase.from('league_owners').select('*').single();
+    setOwner(ownerData);
 
-  const fetchActivePlayer = async () => {
-    const { data: auctionRow } = await supabase.from('active_auction').select('player_id').eq('id', 2).single();
+    const { data: auctionRow } = await supabase.from('active_auction').select('*').eq('id', 2).single();
     if (auctionRow?.player_id) {
-      const { data: playerData } = await supabase.from('players').select('*').eq('id', auctionRow.player_id).single();
-      setActivePlayer(playerData);
+      const { data: pData } = await supabase.from('players').select('*').eq('id', auctionRow.player_id).single();
+      setActivePlayer(pData);
+      
+      // Fetch user's current bid for this player
+      const { data: bidData } = await supabase.from('bids_draft').select('bid_amount').eq('owner_id', ownerData.id).eq('player_id', auctionRow.player_id).maybeSingle();
+      setMyCurrentBid(bidData ? bidData.bid_amount : null);
     } else {
       setActivePlayer(null);
+      setMyCurrentBid(null);
     }
   };
 
   useEffect(() => {
-    fetchOwner();
-    fetchActivePlayer();
-
-    // LISTENERS
-    const channel = supabase.channel('auction-room')
-      // If the admin pushes a new Player ID to active_auction row 2
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'active_auction' }, fetchActivePlayer)
-      // If the admin updates the budget in league_owners
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'league_owners' }, fetchOwner)
+    fetchData();
+    const channel = supabase.channel('auction-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'active_auction' }, fetchData)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'league_owners' }, fetchData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bids_draft' }, fetchData)
       .subscribe();
-
     return () => supabase.removeChannel(channel);
   }, []);
 
   const placeBid = async () => {
-    const amount = parseFloat(bidValue);
-    if (!amount || amount <= 0) return alert("Enter a valid Cr value!");
+    const val = parseFloat(bidValue);
+    if (!val || val <= 0) return alert("Enter valid Cr!");
+    
+    // Upsert so if you change your bid, it updates the existing row
+    const { error } = await supabase.from('bids_draft').upsert({
+      owner_id: owner.id,
+      player_id: activePlayer.id,
+      bid_amount: val
+    }, { onConflict: 'owner_id,player_id' });
 
-    const { error } = await supabase.from('bids_draft').insert([
-      { owner_id: owner.id, player_id: activePlayer.id, bid_amount: amount }
-    ]);
-
-    if (!error) {
-      alert("Bid Placed!");
-      setBidValue('');
-    } else {
-      alert("Error: " + error.message);
-    }
+    if (!error) { setBidValue(''); }
   };
 
-  if (!owner) return <div style={{background:'#111', color:'#fff', height:'100vh', padding:'20px'}}>Loading Stadium...</div>;
+  if (!owner) return <div style={{background:'#111', color:'#fff', height:'100vh', padding:'20px'}}>Entering...</div>;
 
   return (
     <div style={{ backgroundColor: '#111', color: 'white', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' }}>
@@ -63,28 +60,21 @@ export default function Auction() {
 
       {activePlayer ? (
         <div style={{ textAlign: 'center', marginTop: '60px' }}>
-          <h3 style={{ color: '#9ca3af' }}>CURRENT PLAYER</h3>
-          <h1 style={{ fontSize: '4.5rem', margin: '10px 0' }}>{activePlayer.name}</h1>
-          <p style={{ fontSize: '1.5rem', color: '#fbbf24' }}>
-            {activePlayer.type} | Base: {(activePlayer.base_price / 10000000).toFixed(2)} Cr
-          </p>
+          <h1 style={{ fontSize: '3.5rem', margin: '0' }}>{activePlayer.name}</h1>
+          <p style={{ color: '#fbbf24' }}>Base: {(activePlayer.base_price / 10000000).toFixed(2)} Cr</p>
+          
+          <div style={{ background: '#222', padding: '15px', borderRadius: '10px', display: 'inline-block', margin: '20px 0' }}>
+            <p style={{ margin: 0, color: '#9ca3af' }}>Your Active Bid</p>
+            <h2 style={{ margin: 0, color: '#22c55e' }}>{myCurrentBid ? myCurrentBid + " Cr" : "No Bid"}</h2>
+          </div>
 
-          <div style={{ marginTop: '40px', display: 'flex', justifyContent: 'center', gap: '10px' }}>
-            <input 
-              type="number" step="0.01"
-              placeholder="Enter Bid (Cr)" 
-              value={bidValue} onChange={(e) => setBidValue(e.target.value)}
-              style={{ padding: '15px', borderRadius: '5px', width: '150px', color: '#000', fontSize: '1.1rem' }}
-            />
-            <button onClick={placeBid} style={{ padding: '15px 30px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer' }}>
-              PLACE BID
-            </button>
+          <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'center', gap: '10px' }}>
+            <input type="number" step="0.1" value={bidValue} onChange={(e) => setBidValue(e.target.value)} style={{ padding: '15px', width: '120px', color: '#000' }} placeholder="Cr" />
+            <button onClick={placeBid} style={{ padding: '15px 25px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: '5px', fontWeight: 'bold' }}>BID NOW</button>
           </div>
         </div>
       ) : (
-        <div style={{ textAlign: 'center', marginTop: '100px', color: '#666' }}>
-          <h3>Waiting for the Auctioneer to Push a Player...</h3>
-        </div>
+        <div style={{ textAlign: 'center', marginTop: '100px', color: '#666' }}><h3>Waiting for Admin to push a player...</h3></div>
       )}
     </div>
   );
