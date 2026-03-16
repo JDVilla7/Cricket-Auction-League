@@ -1,3 +1,4 @@
+/* pages/admin.js */
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
@@ -5,76 +6,73 @@ export default function Admin() {
   const [pid, setPid] = useState('');
   const [phase, setPhase] = useState('Phase 1');
   const [liveBids, setLiveBids] = useState([]);
-  const [status, setStatus] = useState('System Online');
 
   const fetchBids = async () => {
     const { data } = await supabase
       .from('bids_draft')
       .select('*, league_owners(team_name, budget), players(name)')
-      .order('created_at', { ascending: false });
+      .order('bid_amount', { ascending: false }); // Show highest bid at top
     if (data) setLiveBids(data);
   };
 
   useEffect(() => {
     fetchBids();
-    const channel = supabase.channel('admin-room')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bids_draft' }, fetchBids)
-      .subscribe();
+    const channel = supabase.channel('admin-room').on('postgres_changes', { event: '*', schema: 'public', table: 'bids_draft' }, fetchBids).subscribe();
     return () => supabase.removeChannel(channel);
   }, []);
 
-  const pushPlayer = async () => {
-    if (!pid) return alert("Enter Player ID!");
-    setStatus('Pushing...');
-    const { error } = await supabase.from('active_auction').upsert({ id: 2, player_id: pid, status: 'bidding' });
-    if (!error) {
-      setStatus(`LIVE: Player ${pid}`);
-      alert(`Player ${pid} pushed successfully! Check owner screens.`);
-    } else {
-      alert("Error: " + error.message);
-    }
-  };
-
   const handleSold = async (bid) => {
+    // 1. Safety Check: Is player already sold?
+    const { data: alreadySold } = await supabase.from('auction_results').select('id').eq('player_id', bid.player_id).maybeSingle();
+    if (alreadySold) return alert("Error: This player is already sold!");
+
     const newBudget = (bid.league_owners?.budget || 0) - bid.bid_amount;
+
+    // 2. The Final Sale
     const { error: resErr } = await supabase.from('auction_results').insert([{ 
       player_id: bid.player_id, owner_id: bid.owner_id, winning_bid: bid.bid_amount, phase: phase 
     }]);
-    await supabase.from('league_owners').update({ budget: newBudget }).eq('id', bid.owner_id);
-    await supabase.from('bids_draft').delete().eq('id', bid.id);
 
-    if (!resErr) { alert("SOLD!"); fetchBids(); }
+    // 3. Update Winner's Budget
+    await supabase.from('league_owners').update({ budget: newBudget }).eq('id', bid.owner_id);
+
+    // 4. CRITICAL: Delete ALL bids for this player so nobody else gets charged
+    await supabase.from('bids_draft').delete().eq('player_id', bid.player_id);
+
+    if (!resErr) {
+      alert(`SUCCESS: ${bid.players?.name} sold to ${bid.league_owners?.team_name}`);
+      fetchBids();
+    }
   };
 
-  const resetTournament = async () => {
-    if(!confirm("Reset everything?")) return;
-    await supabase.from('auction_results').delete().neq('id', 0);
-    await supabase.from('bids_draft').delete().neq('id', 0);
-    await supabase.from('league_owners').update({ budget: 150 }).neq('id', 0);
-    alert("Full Reset Done!");
-    fetchBids();
+  const pushPlayer = async () => {
+    if (!pid) return alert("Enter Player ID");
+    await supabase.from('active_auction').upsert({ id: 2, player_id: pid, status: 'bidding' });
+    // Clear previous bids for a fresh start
+    await supabase.from('bids_draft').delete().eq('player_id', pid);
+    alert("Player Pushed & Bids Cleared for start!");
   };
 
   return (
-    <div style={{ background: '#0a0a0a', color: 'white', minHeight: '100vh', padding: '40px', textAlign: 'center', fontFamily: 'sans-serif' }}>
-      <h1>Admin Control Tower</h1>
-      <p style={{ color: status.includes('LIVE') ? '#22c55e' : '#666' }}>● {status}</p>
-
-      <div style={{ background: '#111', padding: '20px', borderRadius: '10px', display: 'inline-block', marginBottom: '20px' }}>
+    <div style={{ background: '#0a0a0a', color: 'white', minHeight: '100vh', padding: '40px', fontFamily: 'sans-serif', textAlign: 'center' }}>
+      <h1>Admin Command Center</h1>
+      <div style={{ background: '#111', padding: '20px', borderRadius: '12px', border: '1px solid #333', maxWidth: '600px', margin: '0 auto' }}>
         <input type="number" placeholder="Player ID" onChange={(e) => setPid(e.target.value)} style={{ padding: '10px', width: '80px' }} />
-        <button onClick={pushPlayer} style={{ padding: '10px 20px', background: '#e11d48', color: '#fff', border: 'none', marginLeft: '10px', borderRadius: '5px', fontWeight: 'bold' }}>PUSH LIVE</button>
+        <button onClick={pushPlayer} style={{ padding: '10px 20px', background: '#e11d48', color: '#fff', border: 'none', marginLeft: '10px', borderRadius: '5px' }}>PUSH LIVE</button>
+        <div style={{marginTop:'10px'}}>
+            <input value={phase} onChange={(e) => setPhase(e.target.value)} style={{background:'#000', color:'#fff', border:'1px solid #444', padding:'5px'}} />
+        </div>
       </div>
 
-      <div style={{ maxWidth: '600px', margin: '0 auto', background: '#111', padding: '20px', borderRadius: '10px' }}>
-        <h3>Active Bids</h3>
+      <div style={{ maxWidth: '600px', margin: '20px auto', background: '#111', padding: '20px', borderRadius: '10px' }}>
+        <h2>Live Bids</h2>
         {liveBids.length > 0 ? liveBids.map((bid) => (
           <div key={bid.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '15px 0', borderBottom: '1px solid #222' }}>
             <span><strong>{bid.league_owners?.team_name}</strong>: {bid.bid_amount} Cr</span>
             <button onClick={() => handleSold(bid)} style={{ background: '#22c55e', color: '#000', padding: '5px 15px', border: 'none', borderRadius: '5px', fontWeight: 'bold' }}>SOLD</button>
           </div>
-        )) : <p style={{color:'#444'}}>No bids yet...</p>}
+        )) : <p>No bids yet...</p>}
       </div>
-      <button onClick={resetTournament} style={{ marginTop: '50px', color: '#444', background: 'none', border: 'none', cursor: 'pointer' }}>Wipe All Data</button>
     </div>
   );
 }
