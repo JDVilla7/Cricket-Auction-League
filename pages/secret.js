@@ -28,30 +28,34 @@ export default function SecretBidding() {
     const { data: o } = await supabase.from('league_owners').select('*').eq('id', id).single();
     setOwner(o);
 
-    // 2. Fetch All Players - Mapping to your 'country' column
+    // 2. Fetch All Players
     const { data: p, error } = await supabase.from('players').select('*').order('name', { ascending: true });
     
-    if (error) {
-        console.error("Supabase Error:", error);
-    }
-
     if (p) {
-      console.log("Players Loaded:", p.length);
       setAllPlayers(p);
-      // Using 'country' column from your screenshot
-      const uniqueCountries = [...new Set(p.map(player => player.country))].filter(Boolean).sort();
+      // FIX: Trim spaces from countries so the dropdown values are clean
+      const uniqueCountries = [...new Set(p.map(player => player.country?.trim()))].filter(Boolean).sort();
       setCountries(uniqueCountries);
     }
   };
 
   const handleFetch = () => {
     const filtered = allPlayers.filter(p => {
-      // Matches your 'name', 'type', and 'country' columns
-      const matchesName = p.name ? p.name.toLowerCase().includes(searchTerm.toLowerCase()) : false;
-      const matchesRole = roleFilter === 'All' || p.type === roleFilter;
-      const matchesCountry = countryFilter === 'All' || p.country === countryFilter;
+      // 1. Clean the search term and player name (Lowercase + Trim)
+      const cleanSearch = searchTerm.trim().toLowerCase();
+      const playerName = p.name ? p.name.trim().toLowerCase() : "";
+      const matchesName = playerName.includes(cleanSearch);
+
+      // 2. Clean the database values and filter values for a perfect match
+      const playerRole = p.type ? p.type.trim() : "";
+      const playerCountry = p.country ? p.country.trim() : "";
+      
+      const matchesRole = roleFilter === 'All' || playerRole === roleFilter;
+      const matchesCountry = countryFilter === 'All' || playerCountry === countryFilter;
+
       return matchesName && matchesRole && matchesCountry;
     });
+    
     setDisplayList(filtered);
   };
 
