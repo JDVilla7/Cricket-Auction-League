@@ -2,6 +2,10 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabaseClient';
 
+// CONFIGURATION - Change these for different tournaments
+const MIN_SQUAD = 11;
+const MAX_SQUAD = 15;
+
 export default function SecretBidding() {
   const router = useRouter();
   const { id } = router.query;
@@ -19,7 +23,6 @@ export default function SecretBidding() {
   const [bidAmounts, setBidAmounts] = useState({});
   const [suggestions, setSuggestions] = useState([]);
   
-  // State to track which player is being edited in the squad list
   const [editingId, setEditingId] = useState(null);
   const [editAmount, setEditAmount] = useState('');
 
@@ -46,6 +49,7 @@ export default function SecretBidding() {
     setMySquad(squad || []);
   };
 
+  // ... (handleSearchChange, handleFetch, handleSelectSuggestion remain the same)
   const handleSearchChange = (val) => {
     setSearchTerm(val);
     if (val.trim().length > 1) {
@@ -71,61 +75,54 @@ export default function SecretBidding() {
     setDisplayList(filtered);
   };
 
-  // --- SUBMIT WITH BASE PRICE CHECK ---
   const submitBid = async (player) => {
+    if (mySquad.length >= MAX_SQUAD) return alert(`Squad is full! (Max ${MAX_SQUAD})`);
+    
     const amount = bidAmounts[player.id];
     const baseInCr = player.base_price / 10000000;
     
     if (!amount || parseFloat(amount) < baseInCr) {
-      return alert(`Error: Bid must be at least ${baseInCr.toFixed(2)} Cr (Base Price)`);
+      return alert(`Error: Min bid is ${baseInCr.toFixed(2)} Cr`);
     }
 
     const bidValue = parseFloat(amount);
     if (bidValue > owner.budget) return alert("Insufficient Budget!");
 
     setLoading(true);
-    const { error: resErr } = await supabase.from('auction_results').insert([{
+    await supabase.from('auction_results').insert([{
       player_id: player.id, owner_id: id, winning_bid: bidValue, round_type: 'secret'
     }]);
-
-    if (!resErr) {
-      await supabase.from('league_owners').update({ budget: owner.budget - bidValue }).eq('id', id);
-      setBidAmounts({ ...bidAmounts, [player.id]: '' });
-      fetchData();
-    }
+    await supabase.from('league_owners').update({ budget: owner.budget - bidValue }).eq('id', id);
+    setBidAmounts({ ...bidAmounts, [player.id]: '' });
+    fetchData();
     setLoading(false);
-  };
-
-  // --- SMOOTH EDIT (IN-LINE) ---
-  const startEdit = (item) => {
-    setEditingId(item.player_id);
-    setEditAmount(item.winning_bid);
   };
 
   const saveEdit = async (item) => {
     const baseInCr = item.players.base_price / 10000000;
     const newBid = parseFloat(editAmount);
-
     if (newBid < baseInCr) return alert(`Min bid is ${baseInCr.toFixed(2)} Cr`);
-    
     const diff = newBid - item.winning_bid;
     if (diff > owner.budget) return alert("Insufficient Budget!");
 
     await supabase.from('auction_results').update({ winning_bid: newBid }).eq('player_id', item.player_id).eq('owner_id', id);
     await supabase.from('league_owners').update({ budget: owner.budget - diff }).eq('id', id);
-    
     setEditingId(null);
     fetchData();
   };
 
   const deletePlayer = async (item) => {
-    if (!confirm(`Remove ${item.players.name}? Refund: ${item.winning_bid} Cr`)) return;
+    if (!confirm(`Remove ${item.players.name}?`)) return;
     await supabase.from('auction_results').delete().eq('player_id', item.player_id).eq('owner_id', id);
     await supabase.from('league_owners').update({ budget: owner.budget + item.winning_bid }).eq('id', id);
     fetchData();
   };
 
   if (!owner) return <div style={{background:'#000', height:'100vh'}} />;
+
+  // Logic for the Squad Status
+  const squadRemaining = MIN_SQUAD - mySquad.length;
+  const squadStatusColor = mySquad.length < MIN_SQUAD ? '#fbbf24' : '#22c55e';
 
   return (
     <div style={{ background: '#050505', color: '#fff', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' }}>
@@ -136,7 +133,7 @@ export default function SecretBidding() {
         <h2 style={{ color: '#22c55e', margin: '5px 0' }}>{owner.budget.toFixed(2)} Cr</h2>
       </div>
 
-      {/* SEARCH (Logic same as before) */}
+      {/* SEARCH BOX */}
       <div style={{ maxWidth: '800px', margin: '0 auto', background: '#111', padding: '20px', borderRadius: '15px', border: '1px solid #333' }}>
          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px', marginBottom: '20px' }}>
             <select onChange={(e) => setRoleFilter(e.target.value)} style={{ padding: '12px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '8px' }}>
@@ -152,7 +149,7 @@ export default function SecretBidding() {
          <button onClick={handleFetch} style={{ width: '100%', padding: '15px', background: '#fbbf24', color: '#000', fontWeight: 'bold', borderRadius: '8px', border: 'none' }}>🔍 FETCH PLAYERS</button>
       </div>
 
-      {/* FETCHED RESULTS */}
+      {/* RESULTS LIST */}
       <div style={{ maxWidth: '800px', margin: '30px auto' }}>
         {displayList.map(p => (
           <div key={p.id} style={{ background: '#111', padding: '15px', borderRadius: '12px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #222' }}>
@@ -168,9 +165,28 @@ export default function SecretBidding() {
         ))}
       </div>
 
-      {/* SQUAD LIST WITH IN-LINE EDITING */}
+      {/* SQUAD STATUS & LIST */}
       <div style={{ maxWidth: '800px', margin: '40px auto' }}>
-        <h3 style={{ color: '#fbbf24', borderBottom: '1px solid #222', paddingBottom: '10px' }}>SIGNED SQUAD ({mySquad.length})</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '15px' }}>
+          <div>
+            <h3 style={{ color: '#fbbf24', margin: 0 }}>MY SQUAD ({mySquad.length})</h3>
+            <span style={{ fontSize: '0.8rem', color: squadStatusColor }}>
+              {mySquad.length < MIN_SQUAD ? `Need ${squadRemaining} more to reach minimum` : (mySquad.length === MAX_SQUAD ? "SQUAD FULL" : "Minimum squad reached")}
+            </span>
+          </div>
+          <span style={{ fontSize: '0.8rem', color: '#444' }}>REQUIREMENT: {MIN_SQUAD}-{MAX_SQUAD} Players</span>
+        </div>
+
+        {/* VISUAL PROGRESS BAR */}
+        <div style={{ width: '100%', height: '6px', background: '#222', borderRadius: '10px', marginBottom: '30px', overflow: 'hidden' }}>
+          <div style={{ 
+            width: `${(mySquad.length / MAX_SQUAD) * 100}%`, 
+            height: '100%', 
+            background: squadStatusColor, 
+            transition: 'width 0.5s ease' 
+          }} />
+        </div>
+
         {mySquad.map((item, i) => (
           <div key={i} style={{ background: '#0a0a0a', padding: '15px', borderRadius: '10px', border: '1px solid #222', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ flex: 1 }}>
@@ -191,7 +207,7 @@ export default function SecretBidding() {
                 </>
               ) : (
                 <>
-                  <button onClick={() => startEdit(item)} style={{ padding: '8px 15px', background: '#333', color: '#fff', border: 'none', borderRadius: '5px' }}>EDIT</button>
+                  <button onClick={() => setEditingId(item.player_id) || setEditAmount(item.winning_bid)} style={{ padding: '8px 15px', background: '#333', color: '#fff', border: 'none', borderRadius: '5px' }}>EDIT</button>
                   <button onClick={() => deletePlayer(item)} style={{ padding: '8px 15px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: '5px' }}>DEL</button>
                 </>
               )}
