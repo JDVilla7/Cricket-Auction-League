@@ -16,7 +16,7 @@ export default function SecretBidding() {
   const [roleFilter, setRoleFilter] = useState('All');
   const [countryFilter, setCountryFilter] = useState('All');
   const [bidAmounts, setBidAmounts] = useState({});
-  const [suggestions, setSuggestions] = useState([]); // Instant Search state
+  const [suggestions, setSuggestions] = useState([]);
 
   useEffect(() => {
     if (router.isReady) fetchData();
@@ -34,44 +34,41 @@ export default function SecretBidding() {
     }
   };
 
-  // Logic for the Instant Suggestion Dropdown with ACTIVE FILTERS
+  // 1. Suggestion Logic (Matches text + active Role/Country filters)
   const handleSearchChange = (val) => {
     setSearchTerm(val);
-    
     if (val.trim().length > 1) {
       const matches = allPlayers.filter(p => {
-        // 1. Check Name Match
         const playerName = p.name ? p.name.trim().toLowerCase() : "";
-        const matchesName = playerName.includes(val.toLowerCase());
-
-        // 2. Check Active Filter Matches
-        const playerRole = p.type ? p.type.trim() : "";
-        const playerCountry = p.country ? p.country.trim() : "";
+        const cleanVal = val.trim().toLowerCase();
         
-        const matchesRole = roleFilter === 'All' || playerRole === roleFilter;
-        const matchesCountry = countryFilter === 'All' || playerCountry === countryFilter;
+        const matchesName = playerName.includes(cleanVal);
+        const matchesRole = roleFilter === 'All' || p.type?.trim() === roleFilter;
+        const matchesCountry = countryFilter === 'All' || p.country?.trim() === countryFilter;
 
         return matchesName && matchesRole && matchesCountry;
-      }).slice(0, 5); // Limit to top 5 matches
-      
+      }).slice(0, 5);
       setSuggestions(matches);
     } else {
       setSuggestions([]);
     }
   };
 
+  // 2. Selection Logic (Populates search bar and clears list)
+  const handleSelectSuggestion = (player) => {
+    setSearchTerm(player.name);
+    setSuggestions([]);
+  };
+
   const handleFetch = () => {
-    setSuggestions([]); // Close suggestions when fetching
+    setSuggestions([]);
     const filtered = allPlayers.filter(p => {
       const cleanSearch = searchTerm.trim().toLowerCase();
       const playerName = p.name ? p.name.trim().toLowerCase() : "";
-      const matchesName = cleanSearch === "" || playerName.includes(cleanSearch);
-
-      const playerRole = p.type ? p.type.trim() : "";
-      const playerCountry = p.country ? p.country.trim() : "";
       
-      const matchesRole = roleFilter === 'All' || playerRole === roleFilter;
-      const matchesCountry = countryFilter === 'All' || playerCountry === countryFilter;
+      const matchesName = cleanSearch === "" || playerName.includes(cleanSearch);
+      const matchesRole = roleFilter === 'All' || p.type?.trim() === roleFilter;
+      const matchesCountry = countryFilter === 'All' || p.country?.trim() === countryFilter;
 
       return matchesName && matchesRole && matchesCountry;
     });
@@ -82,9 +79,9 @@ export default function SecretBidding() {
     const amount = bidAmounts[player.id];
     if (!amount || parseFloat(amount) <= 0) return alert("Enter a bid amount!");
     const bidValue = parseFloat(amount);
-    if (bidValue > owner.budget) return alert("Insufficient Budget!");
+    if (bidValue > owner.budget) return alert(`Insufficient Budget! (Balance: ${owner.budget} Cr)`);
 
-    if (!confirm(`Confirm buying ${player.name} for ${bidValue} Cr?`)) return;
+    if (!confirm(`Confirm: Sign ${player.name} for ${bidValue} Cr?`)) return;
 
     setLoading(true);
     const { error: resErr } = await supabase.from('auction_results').insert([{
@@ -93,12 +90,14 @@ export default function SecretBidding() {
 
     if (!resErr) {
       await supabase.from('league_owners').update({ budget: owner.budget - bidValue }).eq('id', id);
-      alert(`${player.name} signed!`);
+      alert(`${player.name} added to squad!`);
       setBidAmounts({ ...bidAmounts, [player.id]: '' });
       setSearchTerm('');
       setDisplayList([]);
       fetchData(); 
-    } else { alert("Error: " + resErr.message); }
+    } else {
+      alert("Error: " + resErr.message);
+    }
     setLoading(false);
   };
 
@@ -107,12 +106,14 @@ export default function SecretBidding() {
   return (
     <div style={{ background: '#050505', color: '#fff', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' }}>
       
+      {/* WALLET HEADER */}
       <div style={{ textAlign: 'center', marginBottom: '30px', borderBottom: '1px solid #222', paddingBottom: '20px' }}>
-        <h1 style={{ color: '#e11d48', margin: 0 }}>{owner.team_name}</h1>
+        <h1 style={{ color: '#e11d48', margin: 0, textTransform: 'uppercase' }}>{owner.team_name}</h1>
         <h2 style={{ color: '#22c55e', margin: '5px 0' }}>{owner.budget.toFixed(2)} Cr</h2>
       </div>
 
-      <div style={{ maxWidth: '800px', margin: '0 auto', background: '#111', padding: '20px', borderRadius: '15px', border: '1px solid #333', position: 'relative' }}>
+      {/* SEARCH BOX */}
+      <div style={{ maxWidth: '800px', margin: '0 auto', background: '#111', padding: '20px', borderRadius: '15px', border: '1px solid #333' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px', marginBottom: '20px' }}>
           
           <div>
@@ -147,11 +148,15 @@ export default function SecretBidding() {
             
             {/* SUGGESTIONS DROPDOWN */}
             {suggestions.length > 0 && (
-              <div style={{ position: 'absolute', width: '100%', background: '#1a1a1a', border: '1px solid #444', borderRadius: '8px', zIndex: 10, marginTop: '5px', boxShadow: '0 5px 15px rgba(0,0,0,0.5)' }}>
+              <div style={{ position: 'absolute', width: '100%', background: '#1a1a1a', border: '1px solid #fbbf24', borderRadius: '8px', zIndex: 999, marginTop: '5px', boxShadow: '0 10px 30px rgba(0,0,0,0.8)' }}>
                 {suggestions.map(p => (
-                  <div key={p.id} onClick={() => handleSelectSuggestion(p)} style={{ padding: '12px', borderBottom: '1px solid #222', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}>
+                  <div 
+                    key={p.id} 
+                    onMouseDown={(e) => { e.preventDefault(); handleSelectSuggestion(p); }} 
+                    style={{ padding: '15px', borderBottom: '1px solid #222', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}
+                  >
                     <span>{p.name}</span>
-                    <span style={{ fontSize: '0.7rem', color: '#fbbf24' }}>{p.type}</span>
+                    <span style={{ fontSize: '0.7rem', color: '#666' }}>{p.type}</span>
                   </div>
                 ))}
               </div>
@@ -159,11 +164,12 @@ export default function SecretBidding() {
           </div>
         </div>
 
-        <button onClick={handleFetch} style={{ width: '100%', padding: '15px', background: '#fbbf24', color: '#000', fontWeight: 'bold', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>
-          🔍 FETCH RESULTS
+        <button onClick={handleFetch} style={{ width: '100%', padding: '15px', background: '#fbbf24', color: '#000', fontWeight: 'bold', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '1rem' }}>
+          🔍 FETCH PLAYERS
         </button>
       </div>
 
+      {/* RESULTS LIST */}
       <div style={{ maxWidth: '800px', margin: '30px auto' }}>
         {displayList.map(p => (
           <div key={p.id} style={{ background: '#111', padding: '15px', borderRadius: '12px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #222' }}>
@@ -171,9 +177,21 @@ export default function SecretBidding() {
               <h4 style={{ margin: 0 }}>{p.name}</h4>
               <small style={{ color: '#666' }}>{p.type} | {p.country} | Base: {(p.base_price / 10000000).toFixed(2)} Cr</small>
             </div>
+            
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-              <input type="number" placeholder="Bid" value={bidAmounts[p.id] || ''} onChange={(e) => setBidAmounts({ ...bidAmounts, [p.id]: e.target.value })} style={{ width: '80px', padding: '10px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '8px' }} />
-              <button onClick={() => submitBid(p)} style={{ padding: '10px 20px', background: '#22c55e', color: '#000', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>BUY</button>
+              <input 
+                type="number" 
+                placeholder="Bid" 
+                value={bidAmounts[p.id] || ''}
+                onChange={(e) => setBidAmounts({ ...bidAmounts, [p.id]: e.target.value })}
+                style={{ width: '80px', padding: '10px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '8px' }}
+              />
+              <button 
+                onClick={() => submitBid(p)}
+                style={{ padding: '10px 20px', background: '#22c55e', color: '#000', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}
+              >
+                BUY
+              </button>
             </div>
           </div>
         ))}
