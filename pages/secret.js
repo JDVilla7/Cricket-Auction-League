@@ -5,96 +5,145 @@ import { supabase } from '../lib/supabaseClient';
 export default function SecretBidding() {
   const router = useRouter();
   const { id } = router.query;
-  const [pid, setPid] = useState('');
-  const [amount, setAmount] = useState('');
   const [owner, setOwner] = useState(null);
+  const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Fetch owner data to check budget
-  const fetchOwner = async () => {
-    if (id) {
-      const { data } = await supabase.from('league_owners').select('*').eq('id', id).single();
-      setOwner(data);
-    }
-  };
+  // Search & Filter States
+  const [players, setPlayers] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [roleFilter, setRoleFilter] = useState('All');
+  const [natFilter, setNatFilter] = useState('All');
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
 
-  useEffect(() => { 
-    if (router.isReady) fetchOwner(); 
+  useEffect(() => {
+    if (router.isReady) {
+      fetchInitialData();
+    }
   }, [router.isReady, id]);
 
+  const fetchInitialData = async () => {
+    const { data: o } = await supabase.from('league_owners').select('*').eq('id', id).single();
+    setOwner(o);
+    // Fetch all players for the search list
+    const { data: p } = await supabase.from('players').select('*').order('name', { ascending: true });
+    setPlayers(p || []);
+  };
+
   const submitBid = async () => {
-    if (!pid || !amount) return alert("Enter Player ID and Bid Amount!");
-    
+    if (!selectedPlayer || !amount) return alert("Select a player and enter bid!");
     const bidValue = parseFloat(amount);
-    if (bidValue > owner.budget) return alert(`Insufficient Budget! You only have ${owner.budget} Cr`);
+    if (bidValue > owner.budget) return alert("Insufficient Budget!");
 
     setLoading(true);
-
-    // 1. Insert into results (marking as 'secret' round)
     const { error: resErr } = await supabase.from('auction_results').insert([{
-      player_id: parseInt(pid),
+      player_id: selectedPlayer.id,
       owner_id: id,
       winning_bid: bidValue,
-      round_type: 'secret' 
+      round_type: 'secret'
     }]);
 
     if (!resErr) {
-      // 2. Immediately deduct from owner's budget
-      const { error: budErr } = await supabase
-        .from('league_owners')
-        .update({ budget: owner.budget - bidValue })
-        .eq('id', id);
-
-      if (!budErr) {
-        alert("BID SECURED: Player added to your squad.");
-        setPid(''); setAmount('');
-        fetchOwner(); // Refresh balance
-      } else {
-        alert("Budget Sync Error: " + budErr.message);
-      }
+      await supabase.from('league_owners').update({ budget: owner.budget - bidValue }).eq('id', id);
+      alert(`${selectedPlayer.name} added to squad!`);
+      setSelectedPlayer(null);
+      setAmount('');
+      setSearchTerm('');
+      fetchInitialData();
     } else {
-      alert("Submission Failed: " + resErr.message);
+      alert("Error: " + resErr.message);
     }
     setLoading(false);
   };
 
-  if (!owner) return <div style={{background:'#000', color:'#fff', height:'100vh', display:'grid', placeItems:'center'}}>CONNECTING TO VAULT...</div>;
+  // Filter Logic
+  const filteredPlayers = players.filter(p => {
+    const matchesName = p.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesRole = roleFilter === 'All' || p.role === roleFilter;
+    const matchesNat = natFilter === 'All' || p.nationality === natFilter;
+    return matchesName && matchesRole && matchesNat;
+  });
+
+  if (!owner) return <div style={{background:'#000', color:'#fff', height:'100vh', display:'grid', placeItems:'center'}}>LOADING VAULT...</div>;
 
   return (
-    <div style={{ background: '#050505', color: '#fff', minHeight: '100vh', padding: '20px', textAlign: 'center', fontFamily: 'sans-serif' }}>
+    <div style={{ background: '#050505', color: '#fff', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' }}>
       
-      <div style={{ padding: '30px 0', borderBottom: '1px solid #222', marginBottom: '40px' }}>
-        <h1 style={{ color: '#e11d48', margin: 0, fontSize: '1.5rem' }}>{owner.team_name}</h1>
-        <div style={{ marginTop: '10px' }}>
-          <span style={{ color: '#666', fontSize: '0.8rem' }}>AVAILABLE WALLET:</span>
-          <h2 style={{ color: '#22c55e', margin: 0, fontSize: '2.2rem' }}>{owner.budget.toFixed(2)} Cr</h2>
-        </div>
+      {/* HEADER */}
+      <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+        <h1 style={{ color: '#e11d48', margin: 0 }}>{owner.team_name}</h1>
+        <h2 style={{ color: '#22c55e', margin: 0 }}>{owner.budget.toFixed(2)} Cr</h2>
       </div>
 
-      <div style={{ background: '#111', padding: '40px 20px', borderRadius: '25px', maxWidth: '400px', margin: '0 auto', border: '1px solid #333' }}>
-        <h2 style={{ marginTop: 0, color: '#fbbf24' }}>PHASE 1 & 2</h2>
-        <p style={{ color: '#666', marginBottom: '30px', fontSize: '0.9rem' }}>Enter the Player ID and your winning bid price.</p>
-        
-        <div style={{ textAlign: 'left', marginBottom: '20px' }}>
-          <label style={{ color: '#444', fontSize: '0.7rem', fontWeight: 'bold', marginLeft: '10px' }}>PLAYER ID</label>
-          <input type="number" placeholder="e.g. 45" value={pid} onChange={e => setPid(e.target.value)} 
-            style={{ padding: '15px', width: '100%', boxSizing: 'border-box', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '12px', fontSize: '1.1rem', marginTop: '5px' }} />
+      <div style={{ maxWidth: '500px', margin: '0 auto', background: '#111', padding: '25px', borderRadius: '20px', border: '1px solid #222' }}>
+        <h3 style={{ color: '#fbbf24', textAlign: 'center', marginTop: 0 }}>PHASE 1 & 2 SEARCH</h3>
+
+        {/* FILTERS */}
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+          <select onChange={(e) => setRoleFilter(e.target.value)} style={{ flex: 1, padding: '10px', background: '#000', color: '#fff', border: '1px solid #333' }}>
+            <option value="All">All Roles</option>
+            <option value="Batsman">Batsman</option>
+            <option value="Bowler">Bowler</option>
+            <option value="All-Rounder">All-Rounder</option>
+            <option value="WK">WK</option>
+          </select>
+          <select onChange={(e) => setNatFilter(e.target.value)} style={{ flex: 1, padding: '10px', background: '#000', color: '#fff', border: '1px solid #333' }}>
+            <option value="All">All Nat.</option>
+            <option value="Indian">Indian</option>
+            <option value="Overseas">Overseas</option>
+          </select>
         </div>
 
-        <div style={{ textAlign: 'left', marginBottom: '30px' }}>
-          <label style={{ color: '#444', fontSize: '0.7rem', fontWeight: 'bold', marginLeft: '10px' }}>BID AMOUNT (Cr)</label>
-          <input type="number" step="0.1" placeholder="e.g. 12.5" value={amount} onChange={e => setAmount(e.target.value)} 
-            style={{ padding: '15px', width: '100%', boxSizing: 'border-box', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '12px', fontSize: '1.1rem', marginTop: '5px' }} />
-        </div>
-        
-        <button disabled={loading} onClick={submitBid} 
-          style={{ width: '100%', padding: '18px', background: loading ? '#333' : '#22c55e', color: '#000', fontWeight: '900', border: 'none', borderRadius: '12px', fontSize: '1.1rem', cursor: 'pointer' }}>
-          {loading ? "LOCKING BID..." : "SUBMIT SECRET BID"}
+        {/* SEARCH INPUT */}
+        <input 
+          type="text" 
+          placeholder="Type Player Name..." 
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{ width: '100%', padding: '15px', boxSizing: 'border-box', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '10px', marginBottom: '10px' }}
+        />
+
+        {/* SEARCH RESULTS DROPDOWN */}
+        {searchTerm.length > 1 && (
+          <div style={{ maxHeight: '200px', overflowY: 'auto', background: '#1a1a1a', borderRadius: '10px', marginBottom: '20px', border: '1px solid #333' }}>
+            {filteredPlayers.map(p => (
+              <div 
+                key={p.id} 
+                onClick={() => { setSelectedPlayer(p); setSearchTerm(p.name); }}
+                style={{ padding: '12px', borderBottom: '1px solid #222', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}
+              >
+                <span>{p.name}</span>
+                <span style={{ fontSize: '0.7rem', color: '#666' }}>{p.role} | {p.nationality}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* SELECTION DISPLAY */}
+        {selectedPlayer && (
+          <div style={{ background: '#050505', padding: '15px', borderRadius: '10px', border: '1px solid #fbbf24', marginBottom: '20px', textAlign: 'center' }}>
+            <h4 style={{ margin: 0 }}>SELECTED: {selectedPlayer.name}</h4>
+            <small style={{ color: '#666' }}>Base Price: {(selectedPlayer.base_price / 10000000).toFixed(2)} Cr</small>
+          </div>
+        )}
+
+        {/* BID AMOUNT */}
+        <input 
+          type="number" 
+          step="0.1" 
+          placeholder="Winning Bid (Cr)" 
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          style={{ width: '100%', padding: '15px', boxSizing: 'border-box', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '10px', marginBottom: '20px' }}
+        />
+
+        <button 
+          disabled={loading || !selectedPlayer} 
+          onClick={submitBid}
+          style={{ width: '100%', padding: '18px', background: (loading || !selectedPlayer) ? '#333' : '#22c55e', color: '#000', fontWeight: 'bold', border: 'none', borderRadius: '10px', fontSize: '1.1rem' }}
+        >
+          {loading ? "SUBMITTING..." : "SUBMIT SECRET BID"}
         </button>
-      </div>
-
-      <div style={{ marginTop: '40px', color: '#333', fontSize: '0.7rem' }}>
-        <p>Phase 1 & 2 bids are direct and final.</p>
       </div>
     </div>
   );
