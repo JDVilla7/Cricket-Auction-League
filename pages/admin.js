@@ -26,7 +26,7 @@ export default function Admin() {
 
   // --- PHASE 1 & 2 RESOLUTION LOGIC ---
   const resolveSecretBids = async () => {
-    if (!confirm("This will declare winners for Phase 1 & 2. Clashes will be resolved (highest bidder wins), and losers will be refunded. Proceed?")) return;
+    if (!confirm("RESOLVE PHASE: Clashed players (multiple bids) will be sent to RE-AUCTION. Single bids will be finalized. Proceed?")) return;
     setLoading(true);
 
     try {
@@ -42,33 +42,33 @@ export default function Admin() {
 
       for (const pId in resultsByPlayer) {
         const bids = resultsByPlayer[pId];
+        
         if (bids.length > 1) {
-          // Sort: Highest Bid wins. If equal, first person to have clicked buy wins.
-          bids.sort((a, b) => b.winning_bid - a.winning_bid || new Date(a.created_at) - new Date(b.created_at));
+          // CLASH DETECTED: No one wins. Send to Re-Auction.
+          console.log(`Clash for Player ID ${pId}. Refunding all bidders.`);
           
-          const winner = bids[0];
-          const losers = bids.slice(1);
-
-          // Refund and Delete Losers
-          for (const loser of losers) {
-            const { data: owner } = await supabase.from('league_owners').select('budget').eq('id', loser.owner_id).single();
-            await supabase.from('league_owners').update({ budget: owner.budget + loser.winning_bid }).eq('id', loser.owner_id);
-            await supabase.from('auction_results').delete().eq('player_id', loser.player_id).eq('owner_id', loser.owner_id);
+          for (const bid of bids) {
+            // Fetch current budget and refund
+            const { data: owner } = await supabase.from('league_owners').select('budget').eq('id', bid.owner_id).single();
+            await supabase.from('league_owners').update({ budget: owner.budget + bid.winning_bid }).eq('id', bid.owner_id);
+            
+            // Delete the bid so the player is "Free" again
+            await supabase.from('auction_results').delete().eq('player_id', bid.player_id).eq('owner_id', bid.owner_id);
           }
-        }
+        } 
+        // If bids.length === 1, the player stays with that owner (No action needed)
       }
 
-      // 2. Unlock all teams so they can participate in Phase 3
+      // 2. Unlock all teams for Phase 3
       await supabase.from('league_owners').update({ is_locked: false }).neq('id', 0);
       
-      alert("PHASE 1 & 2 RESOLVED. All clashes cleared and losers refunded.");
+      alert("PHASE RESOLVED: Clashed players are now back in the pool for Re-Auction!");
       syncAdmin();
     } catch (e) {
-      alert("Error resolving bids: " + e.message);
+      alert("Error: " + e.message);
     }
     setLoading(false);
   };
-
   const resetTournament = async () => {
     if (!confirm("This will permanently WIPE all squads and reset budgets. Proceed?")) return;
     try {
