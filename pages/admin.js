@@ -26,45 +26,53 @@ export default function Admin() {
 
   // --- PHASE 1 & 2 RESOLUTION LOGIC ---
   const resolveSecretBids = async () => {
-    if (!confirm("RESOLVE PHASE: Clashed players (multiple bids) will be sent to RE-AUCTION. Single bids will be finalized. Proceed?")) return;
+    if (!confirm("RESOLVE PHASE: All clashed players will be REMOVED from squads and owners will be REFUNDED. Proceed?")) return;
     setLoading(true);
 
     try {
-      // 1. Get all secret bids
+      // 1. Get all bids
       const { data: allBids } = await supabase.from('auction_results').select('*');
+      if (!allBids || allBids.length === 0) return alert("No bids found to resolve.");
       
-      // Group bids by player_id to find clashes
-      const resultsByPlayer = {};
+      // 2. Count how many bids per player
+      const bidCounts = {};
       allBids.forEach(bid => {
-        if (!resultsByPlayer[bid.player_id]) resultsByPlayer[bid.player_id] = [];
-        resultsByPlayer[bid.player_id].push(bid);
+        bidCounts[bid.player_id] = (bidCounts[bid.player_id] || 0) + 1;
       });
 
-      for (const pId in resultsByPlayer) {
-        const bids = resultsByPlayer[pId];
-        
-        if (bids.length > 1) {
-          // CLASH DETECTED: No one wins. Send to Re-Auction.
-          console.log(`Clash for Player ID ${pId}. Refunding all bidders.`);
+      // 3. Find the Clashed Player IDs
+      const clashedPlayerIds = Object.keys(bidCounts).filter(id => bidCounts[id] > 1);
+
+      if (clashedPlayerIds.length === 0) {
+        alert("No clashes found! All players are unique to teams.");
+      } else {
+        // 4. Process each clash
+        for (const pId of clashedPlayerIds) {
+          const bidsToRefund = allBids.filter(b => String(b.player_id) === String(pId));
           
-          for (const bid of bids) {
-            // Fetch current budget and refund
+          for (const bid of bidsToRefund) {
+            // Refund the money
             const { data: owner } = await supabase.from('league_owners').select('budget').eq('id', bid.owner_id).single();
-            await supabase.from('league_owners').update({ budget: owner.budget + bid.winning_bid }).eq('id', bid.owner_id);
+            const newBudget = (owner.budget || 0) + bid.winning_bid;
             
-            // Delete the bid so the player is "Free" again
-            await supabase.from('auction_results').delete().eq('player_id', bid.player_id).eq('owner_id', bid.owner_id);
+            await supabase.from('league_owners').update({ budget: newBudget }).eq('id', bid.owner_id);
+            
+            // Delete the specific bid entry
+            await supabase.from('auction_results')
+              .delete()
+              .eq('player_id', pId)
+              .eq('owner_id', bid.owner_id);
           }
-        } 
-        // If bids.length === 1, the player stays with that owner (No action needed)
+        }
+        alert(`Resolved ${clashedPlayerIds.length} clashes. Players are now free for Re-Auction.`);
       }
 
-      // 2. Unlock all teams for Phase 3
+      // 5. Unlock all teams for Phase 3
       await supabase.from('league_owners').update({ is_locked: false }).neq('id', 0);
       
-      alert("PHASE RESOLVED: Clashed players are now back in the pool for Re-Auction!");
-      syncAdmin();
+      syncAdmin(); // Refresh the Admin view
     } catch (e) {
+      console.error("Resolution Error:", e);
       alert("Error: " + e.message);
     }
     setLoading(false);
