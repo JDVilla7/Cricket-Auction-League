@@ -6,9 +6,16 @@ export default function Dashboard() {
   const [results, setResults] = useState([]);
 
   const loadData = async () => {
+    // 1. Fetch Owners
     const { data: o } = await supabase.from('league_owners').select('*').order('team_name');
-    // Fetching ALL results to ensure nothing is hidden by filters
-    const { data: r } = await supabase.from('auction_results').select('*, players(name, type, country)');
+    
+    // 2. Fetch ALL Results (Simple fetch first to avoid join errors)
+    const { data: r, error } = await supabase
+      .from('auction_results')
+      .select('*, players(name)'); // Try to get the name, but don't crash if it fails
+
+    if (error) console.error("Data Fetch Error:", error);
+
     setOwners(o || []);
     setResults(r || []);
   };
@@ -19,57 +26,77 @@ export default function Dashboard() {
     return () => supabase.removeChannel(sub);
   }, []);
 
-  // Helper to find how many times a player was bid on
+  // Conflict detector
   const getBidCount = (pId) => results.filter(res => res.player_id === pId).length;
 
   return (
-    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '40px', fontFamily: 'sans-serif' }}>
-      <div style={{ textAlign: 'center', marginBottom: '50px' }}>
-        <h1 style={{ fontSize: '3rem', color: '#fbbf24', margin: 0 }}>AUCTION WAR ROOM</h1>
-        <p style={{ color: '#666' }}>Phase 1 & 2 Secret Reveal</p>
+    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' }}>
+      <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+        <h1 style={{ fontSize: '2.5rem', color: '#fbbf24', margin: 0 }}>AUCTION WAR ROOM</h1>
+        <p style={{ color: '#444' }}>Phase 1 & 2 Live Reveal</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '25px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '20px' }}>
         {owners.map(owner => {
-          const squad = results.filter(r => r.owner_id === owner.id);
-          const totalSpent = squad.reduce((sum, item) => sum + item.winning_bid, 0);
+          // Filter results for this specific owner
+          const squad = results.filter(res => String(res.owner_id) === String(owner.id));
+          
+          // Calculate Spent and Count manually for total accuracy
+          const totalSpent = squad.reduce((sum, item) => sum + (parseFloat(item.winning_bid) || 0), 0);
+          const squadCount = squad.length;
 
           return (
             <div key={owner.id} style={{ 
-              background: '#0a0a0a', borderRadius: '20px', 
-              border: owner.is_locked ? '2px solid #22c55e' : '1px solid #333',
-              padding: '25px', position: 'relative', boxShadow: owner.is_locked ? '0 0 20px rgba(34, 197, 94, 0.1)' : 'none'
+              background: '#0a0a0a', borderRadius: '15px', 
+              border: owner.is_locked ? '2px solid #22c55e' : '1px solid #222',
+              padding: '20px', position: 'relative'
             }}>
-              <h2 style={{ margin: '0 0 10px 0', color: '#e11d48' }}>{owner.team_name}</h2>
+              <h2 style={{ margin: '0 0 10px 0', color: '#e11d48', fontSize: '1.4rem' }}>{owner.team_name}</h2>
               
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', borderBottom: '1px solid #222', paddingBottom: '15px' }}>
-                <div><small style={{ color: '#666' }}>SPENT</small><h3 style={{ margin: 0 }}>{totalSpent.toFixed(2)} Cr</h3></div>
-                <div style={{ textAlign: 'right' }}><small style={{ color: '#666' }}>REMAINING</small><h3 style={{ margin: 0, color: '#22c55e' }}>{owner.budget.toFixed(2)} Cr</h3></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px', borderBottom: '1px solid #222', paddingBottom: '10px' }}>
+                <div>
+                  <small style={{ color: '#666', display: 'block', fontSize: '0.7rem' }}>TOTAL SPENT</small>
+                  <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>{totalSpent.toFixed(2)} Cr</span>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <small style={{ color: '#666', display: 'block', fontSize: '0.7rem' }}>REMAINING</small>
+                  <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '1.2rem' }}>{owner.budget.toFixed(2)} Cr</span>
+                </div>
               </div>
 
-              <div style={{ marginBottom: '15px', color: '#fbbf24', fontWeight: 'bold' }}>SQUAD: {squad.length} Players</div>
+              <div style={{ marginBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#fbbf24', fontWeight: 'bold' }}>SQUAD: {squadCount} Players</span>
+                {owner.is_locked && <span style={{ color: '#22c55e', fontSize: '0.7rem', fontWeight: 'bold' }}>● LOCKED</span>}
+              </div>
 
-              <div style={{ maxHeight: '400px', overflowY: 'auto', paddingRight: '5px' }}>
-                {squad.map((item, idx) => {
+              <div style={{ maxHeight: '350px', overflowY: 'auto', background: '#000', borderRadius: '8px', padding: '10px' }}>
+                {squad.length > 0 ? squad.map((item, idx) => {
                   const clashes = getBidCount(item.player_id);
                   return (
                     <div key={idx} style={{ 
-                      display: 'flex', justifyContent: 'space-between', padding: '10px 0', 
-                      borderBottom: '1px solid #1a1a1a', fontSize: '0.9rem',
-                      color: clashes > 1 ? '#fbbf24' : '#fff' // Highlights clashes in Yellow
+                      display: 'flex', justifyContent: 'space-between', padding: '8px 0', 
+                      borderBottom: '1px solid #111', fontSize: '0.85rem'
                     }}>
-                      <span>{item.players?.name} {clashes > 1 && '⚠️'}</span>
-                      <span style={{ fontWeight: 'bold' }}>{item.winning_bid.toFixed(2)}</span>
+                      <span style={{ color: clashes > 1 ? '#fbbf24' : '#fff' }}>
+                        {item.players?.name || `Player ID: ${item.player_id}`} {clashes > 1 && '⚠️'}
+                      </span>
+                      <span style={{ fontWeight: 'bold', color: clashes > 1 ? '#fbbf24' : '#666' }}>
+                        {parseFloat(item.winning_bid).toFixed(2)}
+                      </span>
                     </div>
                   );
-                })}
+                }) : (
+                  <div style={{ color: '#333', textAlign: 'center', padding: '20px' }}>No Players Found</div>
+                )}
               </div>
             </div>
           );
         })}
       </div>
       
-      <button onClick={loadData} style={{ position: 'fixed', bottom: '30px', right: '30px', padding: '15px 40px', background: '#fbbf24', color: '#000', border: 'none', borderRadius: '50px', fontWeight: '900', cursor: 'pointer', fontSize: '1rem' }}>REFRESH</button>
+      <button onClick={loadData} style={{ position: 'fixed', bottom: '20px', right: '20px', padding: '12px 25px', background: '#fbbf24', color: '#000', border: 'none', borderRadius: '50px', fontWeight: 'bold', cursor: 'pointer' }}>
+        REFRESH DATA
+      </button>
     </div>
   );
 }
