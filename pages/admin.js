@@ -113,6 +113,32 @@ export default function Admin() {
     await supabase.from('bids_draft').delete().eq('player_id', bid.player_id);
   };
 
+  const recalculateBudgets = async () => {
+  setLoading(true);
+  try {
+    // 1. Get all owners and all results
+    const { data: owners } = await supabase.from('league_owners').select('*');
+    const { data: results } = await supabase.from('auction_results').select('*');
+
+    for (const owner of owners) {
+      // Find all players belonging to this owner
+      const myPlayers = results.filter(r => String(r.owner_id) === String(owner.id));
+      const totalSpent = myPlayers.reduce((sum, p) => sum + p.winning_bid, 0);
+      
+      // Update the budget (150 - total spent)
+      await supabase.from('league_owners')
+        .update({ budget: 150 - totalSpent })
+        .eq('id', owner.id);
+    }
+
+    alert("Budgets recalculated successfully based on current squads!");
+    syncAdmin();
+  } catch (e) {
+    alert("Error: " + e.message);
+  }
+  setLoading(false);
+};
+
   return (
     <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '30px', textAlign: 'center', fontFamily: 'sans-serif' }}>
       <h1 style={{color: '#e11d48'}}>AUCTION CONTROL TOWER</h1>
@@ -131,6 +157,12 @@ export default function Admin() {
           >
             {loading ? "PROCESSING..." : "✅ RESOLVE SECRET BIDS (PHASE 1 & 2)"}
           </button>
+
+         <button 
+            onClick={recalculateBudgets} 
+            style={{ background: '#3b82f6', color: '#fff', padding: '10px', borderRadius: '5px', border: 'none', marginTop: '10px', cursor: 'pointer' }}>
+            🔄 RE-SYNC ALL BUDGETS
+        </button>   
 
           <button onClick={resetTournament} style={{ width: '100%', padding: '15px', background: '#e11d48', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}>RESET ENTIRE TOURNAMENT</button>
         </div>
