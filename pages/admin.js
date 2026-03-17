@@ -5,6 +5,7 @@ export default function Admin() {
   const [pid, setPid] = useState('');
   const [ownerName, setOwnerName] = useState('');
   const [data, setData] = useState({ player: null, bids: [], isSold: false, winner: null });
+  const [loading, setLoading] = useState(false);
 
   const syncAdmin = async () => {
     const { data: active } = await supabase.from('active_auction').select('*').eq('id', 2).single();
@@ -23,76 +24,65 @@ export default function Admin() {
     return () => supabase.removeChannel(sub);
   }, []);
 
-  // // --- AGGRESSIVE RESET LOGIC ---
-  // const resetTournament = async () => {
-  //   if(!confirm("WARNING: This will delete ALL players from ALL squads and reset budgets to 150 Cr. Proceed?")) return;
-    
-  //   // 1. Force delete all results (using .gte('id', 0) to ensure every row is hit)
-  //   const { error: err1 } = await supabase.from('auction_results').delete().gte('id', 0);
-  //   const { error: err2 } = await supabase.from('bids_draft').delete().gte('id', 0);
-    
-  //   // 2. Reset budgets
-  //   const { error: err3 } = await supabase.from('league_owners').update({ budget: 150 }).gte('id', 0);
-    
-  //   // 3. Clear the active auction control row
-  //   const { error: err4 } = await supabase.from('active_auction').update({ 
-  //     player_id: null, is_sold: false, winner_name: '', winning_amount: 0 
-  //   }).eq('id', 2);
+  // --- PHASE 1 & 2 RESOLUTION LOGIC ---
+  const resolveSecretBids = async () => {
+    if (!confirm("This will declare winners for Phase 1 & 2. Clashes will be resolved (highest bidder wins), and losers will be refunded. Proceed?")) return;
+    setLoading(true);
 
-  //   if (err1 || err2 || err3 || err4) {
-  //     console.error("Reset Errors:", { err1, err2, err3, err4 });
-  //     alert("Partial Reset Failed. Please run the SQL manual wipe or check Supabase Permissions.");
-  //   } else {
-  //     alert("TOURNAMENT WIPED. All squads are now empty.");
-  //     syncAdmin(); // Refresh local admin view
-  //   }
-  // };
+    try {
+      // 1. Get all secret bids
+      const { data: allBids } = await supabase.from('auction_results').select('*');
+      
+      // Group bids by player_id to find clashes
+      const resultsByPlayer = {};
+      allBids.forEach(bid => {
+        if (!resultsByPlayer[bid.player_id]) resultsByPlayer[bid.player_id] = [];
+        resultsByPlayer[bid.player_id].push(bid);
+      });
+
+      for (const pId in resultsByPlayer) {
+        const bids = resultsByPlayer[pId];
+        if (bids.length > 1) {
+          // Sort: Highest Bid wins. If equal, first person to have clicked buy wins.
+          bids.sort((a, b) => b.winning_bid - a.winning_bid || new Date(a.created_at) - new Date(b.created_at));
+          
+          const winner = bids[0];
+          const losers = bids.slice(1);
+
+          // Refund and Delete Losers
+          for (const loser of losers) {
+            const { data: owner } = await supabase.from('league_owners').select('budget').eq('id', loser.owner_id).single();
+            await supabase.from('league_owners').update({ budget: owner.budget + loser.winning_bid }).eq('id', loser.owner_id);
+            await supabase.from('auction_results').delete().eq('player_id', loser.player_id).eq('owner_id', loser.owner_id);
+          }
+        }
+      }
+
+      // 2. Unlock all teams so they can participate in Phase 3
+      await supabase.from('league_owners').update({ is_locked: false }).neq('id', 0);
+      
+      alert("PHASE 1 & 2 RESOLVED. All clashes cleared and losers refunded.");
+      syncAdmin();
+    } catch (e) {
+      alert("Error resolving bids: " + e.message);
+    }
+    setLoading(false);
+  };
 
   const resetTournament = async () => {
-  if (!confirm("This will permanently WIPE all squads and reset budgets. Proceed?")) return;
-
-  try {
-    // 1. Wipe auction_results using owner_id (since they are all '3')
-    // We use .neq('owner_id', '0') because every owner_id is a real string.
-    const { error: err1 } = await supabase
-      .from('auction_results')
-      .delete()
-      .neq('owner_id', '0'); 
-
-    // 2. Wipe bids_draft using player_id
-    const { error: err2 } = await supabase
-      .from('bids_draft')
-      .delete()
-      .neq('player_id', 0);
-
-    // 3. Reset budgets to 150
-    const { error: err3 } = await supabase
-      .from('league_owners')
-      .update({ budget: 150 })
-      .neq('team_name', ''); // Hits every team with a name
-
-    // 4. Clear the active auction row
-    const { error: err4 } = await supabase
-      .from('active_auction')
-      .update({ 
-        player_id: null, 
-        is_sold: false, 
-        winner_name: '', 
-        winning_amount: 0 
-      })
-      .eq('id', 2);
-
-    if (err1 || err2 || err3 || err4) {
-      console.error("Reset Failures:", { err1, err2, err3, err4 });
-      alert("Reset failed. Check the console for specific table errors.");
-    } else {
-      alert("TOURNAMENT WIPED: All squads are now empty.");
-      if (typeof sync === 'function') sync();
+    if (!confirm("This will permanently WIPE all squads and reset budgets. Proceed?")) return;
+    try {
+      await supabase.from('auction_results').delete().neq('owner_id', '0'); 
+      await supabase.from('bids_draft').delete().neq('player_id', 0);
+      await supabase.from('league_owners').update({ budget: 150, is_locked: false }).neq('team_name', ''); 
+      await supabase.from('active_auction').update({ player_id: null, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
+      alert("TOURNAMENT WIPED.");
+      syncAdmin();
+    } catch (e) {
+      alert("Critical Error: " + e.message);
     }
-  } catch (e) {
-    alert("Critical Error: " + e.message);
-  }
-};
+  };
+
   const createOwner = async () => {
     if(!ownerName) return;
     const { data, error } = await supabase.from('league_owners').insert([{ team_name: ownerName, budget: 150 }]).select();
@@ -125,6 +115,15 @@ export default function Admin() {
           <input value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="New Team Name" style={{ padding: '10px', borderRadius: '5px' }} />
           <button onClick={createOwner} style={{ padding: '10px 20px', background: '#22c55e', border: 'none', marginLeft: '5px', fontWeight: 'bold', borderRadius: '5px' }}>ADD TEAM</button>
           <hr style={{margin: '20px 0', borderColor: '#222'}} />
+          
+          <button 
+            disabled={loading}
+            onClick={resolveSecretBids} 
+            style={{ width: '100%', padding: '15px', background: '#22c55e', color: '#000', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer', marginBottom: '10px' }}
+          >
+            {loading ? "PROCESSING..." : "✅ RESOLVE SECRET BIDS (PHASE 1 & 2)"}
+          </button>
+
           <button onClick={resetTournament} style={{ width: '100%', padding: '15px', background: '#e11d48', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}>RESET ENTIRE TOURNAMENT</button>
         </div>
 
