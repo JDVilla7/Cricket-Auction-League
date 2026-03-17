@@ -23,31 +23,76 @@ export default function Admin() {
     return () => supabase.removeChannel(sub);
   }, []);
 
-  // --- AGGRESSIVE RESET LOGIC ---
+  // // --- AGGRESSIVE RESET LOGIC ---
+  // const resetTournament = async () => {
+  //   if(!confirm("WARNING: This will delete ALL players from ALL squads and reset budgets to 150 Cr. Proceed?")) return;
+    
+  //   // 1. Force delete all results (using .gte('id', 0) to ensure every row is hit)
+  //   const { error: err1 } = await supabase.from('auction_results').delete().gte('id', 0);
+  //   const { error: err2 } = await supabase.from('bids_draft').delete().gte('id', 0);
+    
+  //   // 2. Reset budgets
+  //   const { error: err3 } = await supabase.from('league_owners').update({ budget: 150 }).gte('id', 0);
+    
+  //   // 3. Clear the active auction control row
+  //   const { error: err4 } = await supabase.from('active_auction').update({ 
+  //     player_id: null, is_sold: false, winner_name: '', winning_amount: 0 
+  //   }).eq('id', 2);
+
+  //   if (err1 || err2 || err3 || err4) {
+  //     console.error("Reset Errors:", { err1, err2, err3, err4 });
+  //     alert("Partial Reset Failed. Please run the SQL manual wipe or check Supabase Permissions.");
+  //   } else {
+  //     alert("TOURNAMENT WIPED. All squads are now empty.");
+  //     syncAdmin(); // Refresh local admin view
+  //   }
+  // };
+
   const resetTournament = async () => {
-    if(!confirm("WARNING: This will delete ALL players from ALL squads and reset budgets to 150 Cr. Proceed?")) return;
-    
-    // 1. Force delete all results (using .gte('id', 0) to ensure every row is hit)
-    const { error: err1 } = await supabase.from('auction_results').delete().gte('id', 0);
-    const { error: err2 } = await supabase.from('bids_draft').delete().gte('id', 0);
-    
-    // 2. Reset budgets
-    const { error: err3 } = await supabase.from('league_owners').update({ budget: 150 }).gte('id', 0);
-    
-    // 3. Clear the active auction control row
-    const { error: err4 } = await supabase.from('active_auction').update({ 
-      player_id: null, is_sold: false, winner_name: '', winning_amount: 0 
-    }).eq('id', 2);
+  if (!confirm("Wipe ALL squads, bids, and reset budgets to 150 Cr?")) return;
+
+  try {
+    // 1. Delete all results (Phase 1, 2, and Live)
+    const { error: err1 } = await supabase
+      .from('auction_results')
+      .delete()
+      .neq('id', 0); // Deletes every row where ID is not 0
+
+    // 2. Delete all active bids
+    const { error: err2 } = await supabase
+      .from('bids_draft')
+      .delete()
+      .neq('id', 0);
+
+    // 3. Reset all budgets to 150
+    const { error: err3 } = await supabase
+      .from('league_owners')
+      .update({ budget: 150 })
+      .neq('id', 0);
+
+    // 4. Clear the active auction screen
+    const { error: err4 } = await supabase
+      .from('active_auction')
+      .update({ 
+        player_id: null, 
+        is_sold: false, 
+        winner_name: '', 
+        winning_amount: 0 
+      })
+      .eq('id', 2);
 
     if (err1 || err2 || err3 || err4) {
-      console.error("Reset Errors:", { err1, err2, err3, err4 });
-      alert("Partial Reset Failed. Please run the SQL manual wipe or check Supabase Permissions.");
+      console.error("Partial Reset Failure:", { err1, err2, err3, err4 });
+      alert("Reset failed. Ensure Row Level Security (RLS) is disabled for 'Delete' on these tables in Supabase.");
     } else {
-      alert("TOURNAMENT WIPED. All squads are now empty.");
-      syncAdmin(); // Refresh local admin view
+      alert("Database Wiped: All squads are empty and budgets are back to 150 Cr.");
+      // If you have a sync function, call it here to refresh the admin UI
+      if (typeof sync === 'function') sync();
     }
-  };
-
+  } catch (e) {
+    alert("An unexpected error occurred during reset.");
+  }
+};
   const createOwner = async () => {
     if(!ownerName) return;
     const { data, error } = await supabase.from('league_owners').insert([{ team_name: ownerName, budget: 150 }]).select();
