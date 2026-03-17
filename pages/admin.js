@@ -3,82 +3,59 @@ import { supabase } from '../lib/supabaseClient';
 
 export default function Admin() {
   const [pid, setPid] = useState('');
-  const [ownerName, setOwnerName] = useState('');
-  const [data, setData] = useState({ player: null, bids: [], isSold: false, winner: null });
+  const [data, setData] = useState({ player: null, bids: [], isSold: false });
 
-  const syncAdmin = async () => {
-    const { data: active } = await supabase.from('active_auction').select('*').eq('id', 2).single();
-    if (!active?.player_id) return setData({ player: null, bids: [], isSold: false, winner: null });
+  const sync = async () => {
+    const { data: act } = await supabase.from('active_auction').select('*').eq('id', 2).single();
+    if (!act?.player_id) return setData({ player: null, bids: [], isSold: false });
 
-    const { data: p } = await supabase.from('players').select('*').eq('id', active.player_id).single();
-    const { data: bids } = await supabase.from('bids_draft').select('*, league_owners(team_name, budget)').eq('player_id', active.player_id).order('bid_amount', { ascending: false });
-    const { data: res } = await supabase.from('auction_results').select('*, league_owners(team_name)').eq('player_id', active.player_id).maybeSingle();
+    const { data: p } = await supabase.from('players').select('*').eq('id', act.player_id).single();
+    const { data: bids } = await supabase.from('bids_draft').select('*, league_owners(team_name, budget)').eq('player_id', act.player_id).order('bid_amount', { ascending: false });
 
-    setData({ player: p, bids: bids || [], isSold: active.is_sold, winner: res });
+    setData({ player: p, bids: bids || [], isSold: act.is_sold });
   };
 
   useEffect(() => {
-    syncAdmin();
-    const sub = supabase.channel('admin_master').on('postgres_changes', { event: '*', schema: 'public' }, syncAdmin).subscribe();
+    sync();
+    const sub = supabase.channel('admin').on('postgres_changes', { event: '*', schema: 'public' }, sync).subscribe();
     return () => supabase.removeChannel(sub);
   }, []);
 
   const resetTournament = async () => {
-    if(!confirm("Wipe ALL squads and reset budgets to 150 Cr?")) return;
-    
-    // THE NUCLEAR DELETE: Deletes everything where owner_id is not 0
-    await supabase.from('auction_results').delete().neq('owner_id', 0);
-    await supabase.from('bids_draft').delete().neq('owner_id', 0);
-    
-    // Reset all team budgets
+    if(!confirm("DELETE ALL DATA?")) return;
+    // We use .neq('id', 0) to force Supabase to find and kill every row
+    await supabase.from('auction_results').delete().neq('id', 0);
+    await supabase.from('bids_draft').delete().neq('id', 0);
     await supabase.from('league_owners').update({ budget: 150 }).neq('id', 0);
-    
-    // Clear the active screen
-    await supabase.from('active_auction').update({ 
-      player_id: null, is_sold: false, winner_name: '', winning_amount: 0 
-    }).eq('id', 2);
-
-    alert("Tournament Reset: Database is now empty.");
-  };
-
-  const createOwner = async () => {
-    if(!ownerName) return;
-    const { data, error } = await supabase.from('league_owners').insert([{ team_name: ownerName, budget: 150 }]).select();
-    if(!error) alert(`Team Added! ID: ${data[0].id}`);
-    setOwnerName('');
+    await supabase.from('active_auction').update({ player_id: null, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
+    alert("WIPED CLEAN.");
   };
 
   const pushPlayer = async () => {
-    if (!pid) return;
-    await supabase.from('active_auction').update({ player_id: pid, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
+    await supabase.from('active_auction').update({ player_id: pid, is_sold: false }).eq('id', 2);
     await supabase.from('bids_draft').delete().neq('id', 0);
     setPid('');
   };
 
   const handleSold = async (bid) => {
-    if(!confirm(`Sell ${data.player.name} to ${bid.league_owners.team_name}?`)) return;
     await supabase.from('auction_results').insert([{ player_id: bid.player_id, owner_id: bid.owner_id, winning_bid: bid.bid_amount }]);
     await supabase.from('league_owners').update({ budget: bid.league_owners.budget - bid.bid_amount }).eq('id', bid.owner_id);
     await supabase.from('active_auction').update({ is_sold: true, winner_name: bid.league_owners.team_name, winning_amount: bid.bid_amount }).eq('id', 2);
-    await supabase.from('bids_draft').delete().eq('player_id', bid.player_id);
+    await supabase.from('bids_draft').delete().neq('id', 0);
   };
 
   return (
-    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '30px', textAlign: 'center', fontFamily: 'sans-serif' }}>
-      <h1>ADMIN CONTROL</h1>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', maxWidth: '800px', margin: '0 auto 40px auto' }}>
-        <div style={{ background: '#111', padding: '20px', borderRadius: '15px' }}>
-          <input value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="Team Name" style={{ padding: '10px' }} />
-          <button onClick={createOwner} style={{ padding: '10px', background: '#22c55e', marginLeft: '5px' }}>Add</button>
-          <button onClick={resetTournament} style={{ display: 'block', width: '100%', marginTop: '20px', padding: '10px', background: '#e11d48', color: '#fff' }}>RESET ALL DATA</button>
+    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '40px' }}>
+      <button onClick={resetTournament} style={{ background: 'red', padding: '10px' }}>RESET ALL</button>
+      <input value={pid} onChange={e => setPid(e.target.value)} placeholder="Player ID" />
+      <button onClick={pushPlayer}>PUSH</button>
+      {data.player && <h1>{data.player.name}</h1>}
+      {data.bids.map(b => (
+        <div key={b.id} style={{ margin: '10px', border: '1px solid #333', padding: '10px' }}>
+          {b.league_owners.team_name} - {b.bid_amount} Cr
+          <button onClick={() => handleSold(b)}>SOLD</button>
         </div>
-        <div style={{ background: '#111', padding: '20px', borderRadius: '15px' }}>
-          <input value={pid} onChange={e => setPid(e.target.value)} placeholder="Player ID" style={{ padding: '15px', width: '80px' }} />
-          <button onClick={pushPlayer} style={{ padding: '15px', background: '#fbbf24', marginLeft: '10px' }}>PUSH</button>
-        </div>
-      </div>
-      {data.isSold ? <h1>SOLD!</h1> : data.player && <h1>{data.player.name}</h1>}
-      {/* ... bidding list renders here */}
+      ))}
     </div>
   );
 }
