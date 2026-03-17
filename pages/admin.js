@@ -49,28 +49,29 @@ export default function Admin() {
   // };
 
   const resetTournament = async () => {
-  if (!confirm("Wipe ALL squads, bids, and reset budgets to 150 Cr?")) return;
+  if (!confirm("This will permanently WIPE all squads and reset budgets. Proceed?")) return;
 
   try {
-    // 1. Delete all results (Phase 1, 2, and Live)
+    // 1. Wipe auction_results using owner_id (since they are all '3')
+    // We use .neq('owner_id', '0') because every owner_id is a real string.
     const { error: err1 } = await supabase
       .from('auction_results')
       .delete()
-      .neq('id', 0); // Deletes every row where ID is not 0
+      .neq('owner_id', '0'); 
 
-    // 2. Delete all active bids
+    // 2. Wipe bids_draft using player_id
     const { error: err2 } = await supabase
       .from('bids_draft')
       .delete()
-      .neq('id', 0);
+      .neq('player_id', 0);
 
-    // 3. Reset all budgets to 150
+    // 3. Reset budgets to 150
     const { error: err3 } = await supabase
       .from('league_owners')
       .update({ budget: 150 })
-      .neq('id', 0);
+      .neq('team_name', ''); // Hits every team with a name
 
-    // 4. Clear the active auction screen
+    // 4. Clear the active auction row
     const { error: err4 } = await supabase
       .from('active_auction')
       .update({ 
@@ -82,15 +83,14 @@ export default function Admin() {
       .eq('id', 2);
 
     if (err1 || err2 || err3 || err4) {
-      console.error("Partial Reset Failure:", { err1, err2, err3, err4 });
-      alert("Reset failed. Ensure Row Level Security (RLS) is disabled for 'Delete' on these tables in Supabase.");
+      console.error("Reset Failures:", { err1, err2, err3, err4 });
+      alert("Reset failed. Check the console for specific table errors.");
     } else {
-      alert("Database Wiped: All squads are empty and budgets are back to 150 Cr.");
-      // If you have a sync function, call it here to refresh the admin UI
+      alert("TOURNAMENT WIPED: All squads are now empty.");
       if (typeof sync === 'function') sync();
     }
   } catch (e) {
-    alert("An unexpected error occurred during reset.");
+    alert("Critical Error: " + e.message);
   }
 };
   const createOwner = async () => {
