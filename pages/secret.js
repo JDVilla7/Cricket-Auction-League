@@ -90,29 +90,51 @@ export default function SecretBidding() {
     setDisplayList(filtered);
   };
 
-  // --- BIDDING & EDITING LOGIC ---
+  // --- UPDATED SUBMIT BID (WITH DUPLICATE CHECK & INSTANT REFRESH) ---
   const submitBid = async (player) => {
     if (hasSubmitted) return;
+    
+    // 1. HARD BLOCK: Check if player is already in your squad
+    const isAlreadyOwned = mySquad.some(item => item.player_id === player.id);
+    if (isAlreadyOwned) {
+      return alert(`${player.name} is already in your squad!`);
+    }
+
     if (mySquad.length >= MAX_SQUAD) return alert(`Squad Full (Max ${MAX_SQUAD})`);
     
     const amount = bidAmounts[player.id];
     const baseInCr = player.base_price / 10000000;
     
     if (!amount || parseFloat(amount) < baseInCr) {
-      return alert(`Min bid is ${baseInCr.toFixed(2)} Cr (Base Price)`);
+      return alert(`Error: Min bid is ${baseInCr.toFixed(2)} Cr`);
     }
 
     const bidValue = parseFloat(amount);
     if (bidValue > owner.budget) return alert("Insufficient Budget!");
 
     setLoading(true);
-    await supabase.from('auction_results').insert([{
-      player_id: player.id, owner_id: id, winning_bid: bidValue, round_type: 'secret'
-    }]);
-    await supabase.from('league_owners').update({ budget: owner.budget - bidValue }).eq('id', id);
     
-    setBidAmounts({ ...bidAmounts, [player.id]: '' });
-    fetchData();
+    // 2. Process Transaction
+    const { error: resErr } = await supabase.from('auction_results').insert([{
+      player_id: player.id, 
+      owner_id: id, 
+      winning_bid: bidValue, 
+      round_type: 'secret'
+    }]);
+
+    if (!resErr) {
+      await supabase.from('league_owners').update({ budget: owner.budget - bidValue }).eq('id', id);
+      
+      // 3. UI CLEANUP: Clear search and bid input
+      setBidAmounts({ ...bidAmounts, [player.id]: '' });
+      setSearchTerm('');
+      setDisplayList([]); // Clear results so the "bought" player vanishes from view
+      
+      // 4. FORCE REFRESH: Re-fetch squad and budget from DB
+      await fetchData(); 
+    } else {
+      alert("Error: " + resErr.message);
+    }
     setLoading(false);
   };
 
