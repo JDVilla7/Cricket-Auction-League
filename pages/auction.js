@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabaseClient';
-import { motion, AnimatePresence } from 'framer-motion'; // For the "Push" motion
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function LiveAuction() {
   const router = useRouter();
@@ -46,12 +46,9 @@ export default function LiveAuction() {
   const placeBid = async () => {
     if (!activeData.player || activeData.isSold || bidLoading) return;
     if (activeData.bids[0] && String(activeData.bids[0].owner_id) === String(id)) return;
-
     const currentMax = activeData.bids[0]?.bid_amount || (activeData.player.base_price / 10000000);
     const newBid = currentMax + getIncrement(currentMax);
-
     if (newBid > owner.budget) return alert("Insufficient Budget!");
-
     setBidLoading(true);
     await supabase.from('bids_draft').upsert({ player_id: activeData.player.id, owner_id: id, bid_amount: newBid }, { onConflict: 'player_id, owner_id' });
     setBidLoading(false);
@@ -63,102 +60,123 @@ export default function LiveAuction() {
 
   return (
     <div style={{ 
-      backgroundImage: `linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.9)), url('https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?q=80&w=2000')`, // Stadium Background
+      backgroundImage: `linear-gradient(to bottom, rgba(0,20,50,0.8), rgba(0,0,0,0.95)), url('https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?q=80&w=2000')`,
       backgroundSize: 'cover',
       backgroundPosition: 'center',
       backgroundAttachment: 'fixed',
       color: '#fff', 
       minHeight: '100vh', 
       padding: '20px', 
-      fontFamily: 'sans-serif' 
+      fontFamily: '"Orbitron", sans-serif' 
     }}>
       
       <style>{`
-        @keyframes border-glow {
-          0% { box-shadow: 0 0 5px #fbbf24, inset 0 0 5px #fbbf24; }
-          50% { box-shadow: 0 0 20px #fbbf24, inset 0 0 10px #fbbf24; }
-          100% { box-shadow: 0 0 5px #fbbf24, inset 0 0 5px #fbbf24; }
-        }
-        .fifa-card {
-          background: linear-gradient(135deg, #1a1a1a 0%, #000 100%);
-          border: 2px solid #fbbf24;
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap');
+        
+        .advanced-card {
+          background: linear-gradient(135deg, rgba(25,25,25,0.9) 0%, rgba(10,10,10,1) 100%);
+          backdrop-filter: blur(15px);
+          border: 1px solid rgba(251, 191, 36, 0.4);
           border-radius: 20px;
           position: relative;
           overflow: hidden;
-          animation: border-glow 3s infinite;
+          box-shadow: 0 0 40px rgba(0,0,0,0.8), 0 0 20px rgba(251, 191, 36, 0.1);
         }
-        .fifa-card::before {
-          content: "";
+
+        .card-light-effect {
           position: absolute;
-          top: 0; left: 0; width: 100%; height: 100%;
-          background: url('https://www.transparenttextures.com/patterns/carbon-fibre.png');
-          opacity: 0.2;
+          top: 10%; left: 50%;
+          transform: translateX(-50%);
+          width: 300px; height: 300px;
+          background: radial-gradient(circle, rgba(251, 191, 36, 0.2) 0%, rgba(0,0,0,0) 70%);
+          z-index: 0;
+        }
+
+        .neon-border {
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          border: 2px solid transparent;
+          border-radius: 20px;
+          background: linear-gradient(45deg, #fbbf24, #f59e0b, #fbbf24) border-box;
+          -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+          -webkit-mask-composite: destination-out;
+          mask-composite: exclude;
+          opacity: 0.5;
         }
       `}</style>
 
-      {/* HEADER SECTION */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', padding: '15px 25px', borderRadius: '50px', border: '1px solid rgba(255,255,255,0.1)', marginBottom: '30px' }}>
-        <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{owner.team_name}</span>
-        <span style={{ color: '#22c55e', fontWeight: '900', fontSize: '1.2rem' }}>{owner.budget.toFixed(2)} Cr</span>
+      {/* TOP HEADER */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '15px 30px', background: 'rgba(0,0,0,0.8)', borderRadius: '50px', borderBottom: '2px solid #fbbf24', marginBottom: '40px', boxShadow: '0 5px 15px rgba(0,0,0,0.5)' }}>
+        <span style={{ fontWeight: '900', letterSpacing: '1px' }}>{owner.team_name}</span>
+        <span style={{ color: '#22c55e', fontWeight: '900' }}>{owner.budget.toFixed(2)} Cr</span>
       </div>
 
       <AnimatePresence mode="wait">
         {activeData.player && !activeData.isSold ? (
           <motion.div 
             key={activeData.player.id}
-            initial={{ opacity: 0, y: 50, scale: 0.9, rotateX: 20 }}
-            animate={{ opacity: 1, y: 0, scale: 1, rotateX: 0 }}
-            exit={{ opacity: 0, scale: 1.1, filter: 'blur(10px)' }}
-            transition={{ type: "spring", stiffness: 100 }}
+            initial={{ opacity: 0, scale: 0.8, y: 100 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 1.2, filter: 'blur(20px)' }}
+            transition={{ type: "spring", damping: 15 }}
             style={{ maxWidth: '420px', margin: '0 auto' }}
           >
-            
-            {/* FIFA RECTANGLE CARD */}
-            <div className="fifa-card" style={{ padding: '20px', textAlign: 'center' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px', position: 'relative', zIndex: 1 }}>
-                 <img src={`https://flagcdn.com/w80/${activeData.player.country.toLowerCase().substring(0,2)}.png`} style={{ height: '20px', borderRadius: '2px' }} />
-                 <span style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#fbbf24', border: '1px solid #fbbf24', padding: '2px 8px', borderRadius: '4px' }}>{activeData.player.type.toUpperCase()}</span>
-              </div>
+            <div className="advanced-card">
+              <div className="neon-border"></div>
+              <div className="card-light-effect"></div>
 
-              <img 
-                src={`/players/${activeData.player.name.toLowerCase().replace(/ /g, '_')}.jpg`}
-                style={{ width: '100%', height: '320px', objectFit: 'cover', borderRadius: '10px', boxShadow: '0 10px 30px rgba(0,0,0,0.8)', position: 'relative', zIndex: 1 }}
-                onError={(e) => e.target.src = '/players/place_holder.jpg'}
-              />
+              <div style={{ padding: '25px', position: 'relative', zIndex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: '900', color: '#fbbf24' }}>IPL 2026</span>
+                  <span style={{ background: '#fbbf24', color: '#000', padding: '2px 10px', borderRadius: '4px', fontSize: '0.6rem', fontWeight: '900' }}>{activeData.player.type.toUpperCase()}</span>
+                </div>
 
-              <div style={{ position: 'relative', zIndex: 1, marginTop: '20px' }}>
-                <h1 style={{ fontSize: '2.2rem', margin: 0, fontWeight: '900', textTransform: 'uppercase' }}>{activeData.player.name}</h1>
-                
-                <div style={{ marginTop: '20px', background: 'rgba(251, 191, 36, 0.1)', padding: '20px', borderRadius: '15px', border: '1px solid #fbbf24' }}>
-                  <small style={{ color: '#fbbf24', letterSpacing: '2px', fontWeight: 'bold' }}>CURRENT BID</small>
-                  <div style={{ fontSize: '4rem', fontWeight: '900' }}>{currentPrice.toFixed(2)} <small style={{fontSize: '1.2rem'}}>Cr</small></div>
-                  {activeData.bids[0] && <div style={{ color: '#22c55e', fontSize: '0.9rem', fontWeight: 'bold' }}>BY {activeData.bids[0].league_owners.team_name}</div>}
+                <img 
+                  src={`/players/${activeData.player.name.toLowerCase().replace(/ /g, '_')}.jpg`}
+                  style={{ 
+                    width: '100%', height: '340px', objectFit: 'cover', 
+                    borderRadius: '10px', border: '1px solid rgba(251, 191, 36, 0.3)',
+                    boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
+                  }}
+                  onError={(e) => e.target.src = '/players/place_holder.jpg'}
+                />
+
+                <h1 style={{ fontSize: '2rem', margin: '20px 0 5px 0', fontWeight: '900', textAlign: 'center', textTransform: 'uppercase', letterSpacing: '-1px' }}>{activeData.player.name}</h1>
+                <p style={{ textAlign: 'center', color: '#666', fontSize: '0.8rem', margin: '0 0 20px 0', fontWeight: 'bold' }}>{activeData.player.country.toUpperCase()}</p>
+
+                <div style={{ background: 'rgba(0,0,0,0.6)', padding: '20px', borderRadius: '15px', border: '1px solid rgba(251, 191, 36, 0.2)', textAlign: 'center' }}>
+                  <small style={{ color: '#fbbf24', letterSpacing: '3px', fontSize: '0.7rem' }}>CURRENT VALUATION</small>
+                  <div style={{ fontSize: '4.5rem', fontWeight: '900', margin: '5px 0' }}>{currentPrice.toFixed(2)} <small style={{fontSize: '1rem', color: '#666'}}>Cr</small></div>
+                  {activeData.bids[0] && (
+                    <div style={{ color: '#22c55e', fontSize: '0.9rem', fontWeight: 'bold', textShadow: '0 0 10px rgba(34, 197, 94, 0.3)' }}>
+                      LEADING: {activeData.bids[0].league_owners.team_name}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* BID BUTTON */}
             <motion.button 
-              whileTap={{ scale: 0.95 }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               onClick={placeBid} 
               disabled={bidLoading || (activeData.bids[0] && String(activeData.bids[0].owner_id) === String(id))}
               style={{ 
-                width: '100%', marginTop: '25px', padding: '22px', 
-                background: (activeData.bids[0] && String(activeData.bids[0].owner_id) === String(id)) ? '#1a1a1a' : 'linear-gradient(45deg, #fbbf24, #f59e0b)', 
+                width: '100%', marginTop: '25px', padding: '20px', 
+                background: (activeData.bids[0] && String(activeData.bids[0].owner_id) === String(id)) ? '#1a1a1a' : 'linear-gradient(to right, #fbbf24, #f59e0b)', 
                 color: '#000', border: 'none', borderRadius: '15px', fontWeight: '900', fontSize: '1.4rem', cursor: 'pointer',
-                boxShadow: (activeData.bids[0] && String(activeData.bids[0].owner_id) === String(id)) ? 'none' : '0 10px 40px rgba(251, 191, 36, 0.4)'
+                boxShadow: '0 10px 40px rgba(0,0,0,0.5)'
               }}
             >
               {activeData.bids[0] && String(activeData.bids[0].owner_id) === String(id) 
-                ? "HIGHEST BIDDER" 
-                : `BID +${getIncrement(currentPrice).toFixed(2)} Cr`}
+                ? "TOP BIDDER" 
+                : `PLACE BID +${getIncrement(currentPrice).toFixed(2)} Cr`}
             </motion.button>
-
           </motion.div>
         ) : (
-          <div style={{ textAlign: 'center', marginTop: '150px', color: 'rgba(255,255,255,0.2)' }}>
-            <h1 style={{ fontSize: '4rem', letterSpacing: '10px' }}>WAITING...</h1>
-            <p>Admin is preparing the next player card</p>
+          <div style={{ textAlign: 'center', marginTop: '150px', opacity: 0.5 }}>
+            <h1 style={{ fontSize: '3rem', letterSpacing: '10px', fontWeight: '900' }}>STANDBY...</h1>
+            <p>PREPARING THE NEXT AUCTION CARD</p>
           </div>
         )}
       </AnimatePresence>
