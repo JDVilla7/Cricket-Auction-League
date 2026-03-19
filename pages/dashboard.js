@@ -1,270 +1,241 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
+import confetti from 'canvas-confetti';
 
-// --- CONFIGURATION ---
-const TOURNAMENT_NAME = "MY LEAGUE 2026"; // Change this to your actual league name
+const TOURNAMENT_NAME = "MY LEAGUE 2026"; 
 
-export default function Dashboard() {
+export default function Admin() {
+  // --- STATE MANAGEMENT ---
+  const [pid, setPid] = useState('');
+  const [ownerName, setOwnerName] = useState('');
+  const [data, setData] = useState({ player: null, bids: [], isSold: false, winner_name: '', winning_amount: 0 });
+  const [loading, setLoading] = useState(false);
   const [owners, setOwners] = useState([]);
-  const [results, setResults] = useState([]);
 
-  const loadData = async () => {
-    // 1. Fetch Owners
-    const { data: o } = await supabase.from('league_owners').select('*').order('team_name');
+  // --- CORE SYNC LOGIC ---
+  const syncAdmin = async () => {
+    // 1. Fetch Active Auction State
+    const { data: active } = await supabase.from('active_auction').select('*').eq('id', 2).single();
     
-    // 2. Fetch ALL Results with Player Details
-    const { data: r, error } = await supabase
-      .from('auction_results')
-      .select('*, players(name, type)');
+    // 2. Fetch Owners for Management List
+    const { data: oList } = await supabase.from('league_owners').select('*').order('team_name');
+    setOwners(oList || []);
 
-    if (error) console.error("Data Fetch Error:", error);
+    if (!active?.player_id) {
+      return setData({ player: null, bids: [], isSold: active?.is_sold || false, winner_name: active?.winner_name, winning_amount: active?.winning_amount });
+    }
 
-    setOwners(o || []);
-    setResults(r || []);
+    // 3. Fetch Current Player Details
+    const { data: p } = await supabase.from('players').select('*').eq('id', active.player_id).single();
+    
+    // 4. Fetch Real-time Bids (Phase 3)
+    const { data: bids } = await supabase.from('bids_draft')
+      .select('*, league_owners(team_name, budget, id)')
+      .eq('player_id', active.player_id)
+      .order('bid_amount', { ascending: false });
+
+    setData({ 
+      player: p, 
+      bids: bids || [], 
+      isSold: active.is_sold, 
+      winner_name: active.winner_name, 
+      winning_amount: active.winning_amount 
+    });
   };
 
   useEffect(() => {
-    loadData();
-    // Real-time listener for any auction changes
-    const sub = supabase.channel('dashboard_sync')
-      .on('postgres_changes', { event: '*', schema: 'public' }, loadData)
-      .subscribe();
-    
+    syncAdmin();
+    const sub = supabase.channel('admin_master').on('postgres_changes', { event: '*', schema: 'public' }, syncAdmin).subscribe();
     return () => supabase.removeChannel(sub);
   }, []);
 
-  // --- HELPERS ---
-  const getBidCount = (pId) => results.filter(res => res.player_id === pId).length;
+  // --- TOURNAMENT MANAGEMENT FUNCTIONS ---
 
-  const getPlayerImg = (name) => {
-    if (!name) return '/players/place_holder.jpg';
-    const fileName = name.toLowerCase().trim().replace(/ /g, '_');
-    return `/players/${fileName}.jpg`;
+  // 1. RESOLVE SECRET PHASE (Clashes -> Re-Auction)
+  const resolveSecretBids = async () => {
+    if (!confirm("RESOLVE PHASE: Multiple bids on one player will be refunded and cleared for re-auction. Proceed?")) return;
+    setLoading(true);
+    try {
+      const { data: allBids } = await supabase.from('auction_results').select('*');
+      const bidCounts = {};
+      allBids.forEach(bid => { bidCounts[bid.player_id] = (bidCounts[bid.player_id] || 0) + 1; });
+      const clashedIds = Object.keys(bidCounts).filter(id => bidCounts[id] > 1);
+
+      for (const pId of clashedIds) {
+        const toRefund = allBids.filter(b => String(b.player_id) === String(pId));
+        for (const bid of toRefund) {
+          const { data: owner } = await supabase.from('league_owners').select('budget').eq('id', bid.owner_id).single();
+          await supabase.from('league_owners').update({ budget: owner.budget + bid.winning_bid }).eq('id', bid.owner_id);
+          await supabase.from('auction_results').delete().eq('player_id', pId).eq('owner_id', bid.owner_id);
+        }
+      }
+      await supabase.from('league_owners').update({ is_locked: false }).neq('id', 0);
+      alert("SECRET PHASE RESOLVED: Clashes cleared for Re-Auction!");
+      syncAdmin();
+    } catch (e) { alert("Error: " + e.message); }
+    setLoading(false);
   };
 
-  const getRoleBadge = (type) => {
-    const roles = {
-      'Batsman': { color: '#ef4444' },
-      'Fast Bowler': { color: '#3b82f6' },
-      'Spin Bowler': { color: '#60a5fa' },
-      'All-rounder': { color: '#fbbf24' },
-      'Wicket-keeper': { color: '#10b981' }
-    };
-    const role = roles[type] || { color: '#666' };
-    return (
-      <span style={{ 
-        color: role.color, 
-        fontSize: '0.6rem', 
-        fontWeight: '900', 
-        border: `1px solid ${role.color}`, 
-        padding: '1px 5px', 
-        borderRadius: '3px',
-        marginRight: '8px',
-        textTransform: 'uppercase'
-      }}>
-        {type ? type.substring(0, 3) : 'OTH'}
-      </span>
-    );
+  // 2. RE-SYNC BUDGET AUDIT (The "Truth" function)
+  const recalculateBudgets = async () => {
+    if (!confirm("Audit all team budgets based on actual auction results?")) return;
+    setLoading(true);
+    const { data: owners } = await supabase.from('league_owners').select('*');
+    const { data: results } = await supabase.from('auction_results').select('*');
+    for (const owner of owners) {
+      const spent = results.filter(r => String(r.owner_id) === String(owner.id)).reduce((sum, p) => sum + p.winning_bid, 0);
+      await supabase.from('league_owners').update({ budget: 150 - spent }).eq('id', owner.id);
+    }
+    alert("BUDGET AUDIT COMPLETE: All team wallets updated.");
+    setLoading(false);
+    syncAdmin();
+  };
+
+  // 3. RESET ENTIRE TOURNAMENT (Dangerous)
+  const resetTournament = async () => {
+    if (!confirm("PERMANENT WIPE: This will delete ALL bids, results, and reset budgets to 150. Proceed?")) return;
+    setLoading(true);
+    await supabase.from('auction_results').delete().neq('owner_id', '0'); 
+    await supabase.from('bids_draft').delete().neq('player_id', 0);
+    await supabase.from('league_owners').update({ budget: 150, is_locked: false }).neq('team_name', ''); 
+    await supabase.from('active_auction').update({ player_id: null, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
+    alert("SYSTEM RESET: Fresh Tournament Ready.");
+    setLoading(false);
+    syncAdmin();
+  };
+
+  // 4. TEAM MANAGEMENT
+  const createOwner = async () => {
+    if(!ownerName) return;
+    const { error } = await supabase.from('league_owners').insert([{ team_name: ownerName, budget: 150 }]);
+    if(!error) { setOwnerName(''); syncAdmin(); alert("Team Added!"); }
+  };
+
+  // 5. LIVE AUCTION CONTROL (The "Push")
+  const pushPlayer = async () => {
+    if (!pid) return;
+    setLoading(true);
+    await supabase.from('active_auction').update({ 
+      player_id: pid, 
+      is_sold: false, 
+      winner_name: '', 
+      winning_amount: 0 
+    }).eq('id', 2);
+    await supabase.from('bids_draft').delete().neq('player_id', 0);
+    setPid('');
+    setLoading(false);
+    alert("Player Pushed to Stage!");
+  };
+
+  // 6. FINALIZE SALE
+  const handleSold = async (bid) => {
+    if(!confirm(`Sell ${data.player.name} to ${bid.league_owners.team_name} for ${bid.bid_amount} Cr?`)) return;
+    setLoading(true);
+    const { error: resErr } = await supabase.from('auction_results').insert([{ 
+      player_id: bid.player_id, 
+      owner_id: bid.owner_id, 
+      winning_bid: bid.bid_amount 
+    }]);
+
+    if (!resErr) {
+      await supabase.from('league_owners').update({ budget: bid.league_owners.budget - bid.bid_amount }).eq('id', bid.owner_id);
+      await supabase.from('active_auction').update({ 
+        is_sold: true, 
+        winner_name: bid.league_owners.team_name, 
+        winning_amount: bid.bid_amount 
+      }).eq('id', 2);
+      await supabase.from('bids_draft').delete().eq('player_id', bid.player_id);
+      confetti({ particleCount: 250, spread: 100, origin: { y: 0.6 } });
+    }
+    setLoading(false);
   };
 
   return (
     <div style={{ 
-      backgroundImage: `linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.95)), url('https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?q=80&w=2000')`,
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-      backgroundAttachment: 'fixed',
-      color: '#fff', 
-      minHeight: '100vh', 
-      padding: '40px', 
-      fontFamily: '"Orbitron", sans-serif' 
+      backgroundImage: `linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.9)), url('https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?q=80&w=2000')`,
+      backgroundSize: 'cover', backgroundAttachment: 'fixed', color: '#fff', minHeight: '100dvh', padding: '20px', fontFamily: '"Orbitron", sans-serif', boxSizing: 'border-box'
     }}>
-      
-      {/* GOOGLE FONTS & GLOBAL STYLES */}
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap');
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap');`}</style>
+
+      <h1 style={{ textAlign: 'center', color: '#fbbf24', fontSize: '1.8rem', marginBottom: '20px', textShadow: '0 0 20px #000' }}>AUCTION CONTROL TOWER</h1>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '20px', maxWidth: '1200px', margin: '0 auto' }}>
         
-        ::-webkit-scrollbar { width: 5px; }
-        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
-        ::-webkit-scrollbar-thumb { background: #fbbf24; border-radius: 10px; }
-      `}</style>
+        {/* LEFT COLUMN: MANAGEMENT TOOLS */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          {/* TEAM CREATION */}
+          <div style={{ background: 'rgba(0,0,0,0.8)', padding: '20px', borderRadius: '15px', border: '1px solid rgba(255,255,255,0.1)' }}>
+            <h4 style={{ color: '#fbbf24', marginTop: 0, fontSize: '0.8rem' }}>TEAM MANAGEMENT</h4>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="New Team Name" style={{ flex: 1, padding: '12px', background: '#111', border: '1px solid #333', color: '#fff', borderRadius: '8px' }} />
+              <button onClick={createOwner} style={{ padding: '0 20px', background: '#22c55e', border: 'none', fontWeight: '900', borderRadius: '8px', cursor: 'pointer' }}>ADD</button>
+            </div>
+          </div>
 
-      {/* HEADER SECTION */}
-      <div style={{ textAlign: 'center', marginBottom: '60px' }}>
-        <motion.h1 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          style={{ 
-            fontSize: '3.5rem', 
-            color: '#fbbf24', 
-            margin: 0, 
-            textShadow: '0 0 30px rgba(251, 191, 36, 0.4)',
-            letterSpacing: '-2px',
-            fontWeight: '900'
-          }}>
-          {TOURNAMENT_NAME}
-        </motion.h1>
-        <p style={{ color: '#666', fontWeight: 'bold', letterSpacing: '5px', textTransform: 'uppercase', fontSize: '0.8rem' }}>
-          War Room Live Squad Tracker
-        </p>
+          {/* STAGE CONTROL */}
+          <div style={{ background: 'rgba(0,0,0,0.8)', padding: '20px', borderRadius: '15px', border: '2px solid #fbbf24' }}>
+            <h4 style={{ color: '#fbbf24', marginTop: 0, fontSize: '0.8rem' }}>LIVE STAGE (PUSH PID)</h4>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input value={pid} onChange={e => setPid(e.target.value)} placeholder="PID" style={{ width: '80px', padding: '15px', background: '#000', border: '1px solid #fbbf24', color: '#fff', borderRadius: '10px', fontSize: '1.5rem', textAlign: 'center', fontWeight: '900' }} />
+              <button onClick={pushPlayer} disabled={loading} style={{ flex: 1, background: '#fbbf24', border: 'none', fontWeight: '900', borderRadius: '10px', cursor: 'pointer', fontSize: '1rem' }}>PUSH TO STADIUM</button>
+            </div>
+          </div>
+
+          {/* SYSTEM OPERATIONS */}
+          <div style={{ background: 'rgba(0,0,0,0.8)', padding: '20px', borderRadius: '15px', border: '1px solid rgba(255,255,255,0.1)' }}>
+            <h4 style={{ color: '#fbbf24', marginTop: 0, fontSize: '0.8rem' }}>DANGER ZONE</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+               <button onClick={resolveSecretBids} style={{ background: '#f59e0b', padding: '12px', border: 'none', borderRadius: '8px', fontWeight: '900', fontSize: '0.7rem' }}>RESOLVE SECRET</button>
+               <button onClick={recalculateBudgets} style={{ background: '#3b82f6', padding: '12px', border: 'none', borderRadius: '8px', fontWeight: '900', fontSize: '0.7rem' }}>RE-SYNC BUDGETS</button>
+               <button onClick={resetTournament} style={{ gridColumn: 'span 2', background: '#e11d48', padding: '12px', border: 'none', borderRadius: '8px', fontWeight: '900', marginTop: '5px' }}>RESET ENTIRE TOURNAMENT</button>
+            </div>
+          </div>
+
+        </div>
+
+        {/* RIGHT COLUMN: LIVE AUCTION VIEW */}
+        <div style={{ background: 'rgba(0,0,0,0.9)', padding: '25px', borderRadius: '20px', border: '1px solid #333', textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: '400px' }}>
+          <AnimatePresence mode="wait">
+            {data.isSold ? (
+              <motion.div initial={{ scale: 0.5 }} animate={{ scale: 1 }} style={{ padding: '40px' }}>
+                <h1 style={{ color: '#22c55e', fontSize: '4rem', margin: 0 }}>SOLD!</h1>
+                <h2 style={{ fontSize: '1.5rem', textTransform: 'uppercase' }}>{data.winner_name}</h2>
+                <div style={{ color: '#fbbf24', fontSize: '2rem', fontWeight: '900' }}>{data.winning_amount} Cr</div>
+              </motion.div>
+            ) : data.player ? (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} key={data.player.id}>
+                 <span style={{ color: '#fbbf24', fontSize: '0.6rem', border: '1px solid #fbbf24', padding: '3px 10px', borderRadius: '5px' }}>{TOURNAMENT_NAME}</span>
+                 <h1 style={{ fontSize: '2.5rem', margin: '15px 0 5px 0', textTransform: 'uppercase' }}>{data.player.name}</h1>
+                 <div style={{ color: '#fbbf24', fontSize: '4rem', fontWeight: '900' }}>
+                    {data.bids[0]?.bid_amount.toFixed(2) || (data.player.base_price/10000000).toFixed(2)} 
+                    <small style={{fontSize: '1rem'}}> Cr</small>
+                 </div>
+                 
+                 <div style={{ textAlign: 'left', marginTop: '30px' }}>
+                   <h5 style={{ color: '#444', margin: '0 0 10px 0', borderBottom: '1px solid #222' }}>INCOMING BIDS</h5>
+                   <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                     {data.bids.map(b => (
+                       <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#000', marginBottom: '8px', borderRadius: '10px', border: '1px solid #222', alignItems: 'center' }}>
+                         <span style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{b.league_owners.team_name}</span>
+                         <button onClick={() => handleSold(b)} style={{ background: '#22c55e', border: 'none', padding: '8px 20px', borderRadius: '6px', fontWeight: '900', cursor: 'pointer' }}>SELL</button>
+                       </div>
+                     ))}
+                     {data.bids.length === 0 && <div style={{ color: '#222', padding: '20px' }}>WAITING FOR BIDS...</div>}
+                   </div>
+                 </div>
+              </motion.div>
+            ) : (
+              <div style={{ opacity: 0.2 }}>
+                <h1 style={{ fontSize: '3rem', letterSpacing: '10px' }}>READY</h1>
+                <p>Push a PID to start the show</p>
+              </div>
+            )}
+          </AnimatePresence>
+        </div>
+
       </div>
-
-      {/* MAIN GRID */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', 
-        gap: '30px' 
-      }}>
-        {owners.map((owner, index) => {
-          const squad = results.filter(res => String(res.owner_id) === String(owner.id));
-          const totalSpent = squad.reduce((sum, item) => sum + (parseFloat(item.winning_bid) || 0), 0);
-
-          return (
-            <motion.div 
-              key={owner.id}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: index * 0.05 }}
-              style={{ 
-                background: 'rgba(255,255,255,0.03)', 
-                backdropFilter: 'blur(15px)',
-                borderRadius: '25px', 
-                border: owner.is_locked ? '2px solid #22c55e' : '1px solid rgba(251,191,36,0.3)',
-                padding: '25px', 
-                position: 'relative',
-                boxShadow: owner.is_locked ? '0 0 30px rgba(34, 197, 94, 0.2)' : '0 20px 50px rgba(0,0,0,0.5)',
-              }}
-            >
-              {/* TEAM NAME & BUDGET HEADER */}
-              <h2 style={{ margin: '0 0 20px 0', color: '#e11d48', fontSize: '1.8rem', fontWeight: '900', textTransform: 'uppercase' }}>
-                {owner.team_name}
-              </h2>
-              
-              <div style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                marginBottom: '20px', 
-                background: 'rgba(0,0,0,0.4)',
-                padding: '15px',
-                borderRadius: '15px',
-                border: '1px solid rgba(255,255,255,0.05)'
-              }}>
-                <div>
-                  <small style={{ color: '#444', display: 'block', fontSize: '0.6rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Total Spent</small>
-                  <span style={{ color: '#fff', fontWeight: '900', fontSize: '1.4rem' }}>{totalSpent.toFixed(2)} <small style={{fontSize:'0.7rem'}}>Cr</small></span>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <small style={{ color: '#444', display: 'block', fontSize: '0.6rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Remaining</small>
-                  <span style={{ color: '#22c55e', fontWeight: '900', fontSize: '1.4rem' }}>{owner.budget.toFixed(2)} <small style={{fontSize:'0.7rem'}}>Cr</small></span>
-                </div>
-              </div>
-
-              {/* SQUAD COUNT & LOCK BADGE */}
-              <div style={{ marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: '#fbbf24', fontWeight: '900', fontSize: '0.8rem', letterSpacing: '1px' }}>
-                  SQUAD: {squad.length} / 15
-                </span>
-                {owner.is_locked && (
-                  <span style={{ 
-                    background: '#22c55e', 
-                    color: '#000', 
-                    fontSize: '0.6rem', 
-                    padding: '3px 10px', 
-                    borderRadius: '5px', 
-                    fontWeight: '900',
-                    boxShadow: '0 0 10px rgba(34, 197, 94, 0.5)'
-                  }}>LOCKED</span>
-                )}
-              </div>
-
-              {/* PLAYER LIST */}
-              <div style={{ 
-                maxHeight: '380px', 
-                overflowY: 'auto', 
-                background: 'rgba(0,0,0,0.2)', 
-                borderRadius: '15px', 
-                padding: '10px',
-                border: '1px solid rgba(255,255,255,0.02)'
-              }}>
-                {squad.length > 0 ? squad.map((item, idx) => {
-                  const clashes = getBidCount(item.player_id);
-                  return (
-                    <div key={idx} style={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between', 
-                      alignItems: 'center',
-                      padding: '12px 8px', 
-                      borderBottom: '1px solid rgba(255,255,255,0.03)',
-                      fontSize: '0.9rem'
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <img 
-                          src={getPlayerImg(item.players?.name)} 
-                          style={{ 
-                            width: '35px', 
-                            height: '35px', 
-                            borderRadius: '50%', 
-                            objectFit: 'cover', 
-                            background:'#111',
-                            border: clashes > 1 ? '1px solid #fbbf24' : '1px solid #333'
-                          }}
-                          onError={(e) => e.target.src = '/players/place_holder.jpg'}
-                        />
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ 
-                            color: clashes > 1 ? '#fbbf24' : '#fff', 
-                            fontWeight: clashes > 1 ? '900' : 'normal',
-                            display: 'flex',
-                            alignItems: 'center'
-                          }}>
-                            {item.players?.name || `ID: ${item.player_id}`} {clashes > 1 && ' ⚠️'}
-                          </span>
-                          <div style={{ marginTop: '2px' }}>{getRoleBadge(item.players?.type)}</div>
-                        </div>
-                      </div>
-                      <span style={{ 
-                        fontWeight: '900', 
-                        color: clashes > 1 ? '#fbbf24' : '#666',
-                        fontSize: '1rem'
-                      }}>
-                        {parseFloat(item.winning_bid).toFixed(2)}
-                      </span>
-                    </div>
-                  );
-                }) : (
-                  <div style={{ color: '#222', textAlign: 'center', padding: '40px', fontSize: '0.8rem', fontWeight: '900', letterSpacing: '2px' }}>
-                    SQUAD EMPTY
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          );
-        })}
-      </div>
-      
-      {/* FLOATING REFRESH BUTTON */}
-      <motion.button 
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        onClick={loadData} 
-        style={{ 
-          position: 'fixed', 
-          bottom: '30px', 
-          right: '30px', 
-          padding: '18px 40px', 
-          background: 'linear-gradient(45deg, #fbbf24, #f59e0b)', 
-          color: '#000', 
-          border: 'none', 
-          borderRadius: '50px', 
-          fontWeight: '900', 
-          cursor: 'pointer',
-          boxShadow: '0 15px 40px rgba(251, 191, 36, 0.4)',
-          fontSize: '0.9rem',
-          letterSpacing: '1px'
-        }}
-      >
-        REFRESH WAR ROOM
-      </motion.button>
     </div>
   );
 }
