@@ -24,77 +24,61 @@ export default function Admin() {
     return () => supabase.removeChannel(sub);
   }, []);
 
-  // --- PHASE 1 & 2 RESOLUTION LOGIC ---
+  // --- RESOLVE PHASE 1 & 2 (Clashes go to Re-Auction) ---
   const resolveSecretBids = async () => {
-    if (!confirm("RESOLVE PHASE: All clashed players will be REMOVED from squads and owners will be REFUNDED. Proceed?")) return;
+    if (!confirm("RESOLVE PHASE: Clashed players (multiple bids) will be sent to RE-AUCTION. Proceed?")) return;
     setLoading(true);
-
     try {
-      // 1. Get all bids
       const { data: allBids } = await supabase.from('auction_results').select('*');
-      if (!allBids || allBids.length === 0) return alert("No bids found to resolve.");
-      
-      // 2. Count how many bids per player
       const bidCounts = {};
-      allBids.forEach(bid => {
-        bidCounts[bid.player_id] = (bidCounts[bid.player_id] || 0) + 1;
-      });
+      allBids.forEach(bid => { bidCounts[bid.player_id] = (bidCounts[bid.player_id] || 0) + 1; });
+      const clashedIds = Object.keys(bidCounts).filter(id => bidCounts[id] > 1);
 
-      // 3. Find the Clashed Player IDs
-      const clashedPlayerIds = Object.keys(bidCounts).filter(id => bidCounts[id] > 1);
-
-      if (clashedPlayerIds.length === 0) {
-        alert("No clashes found! All players are unique to teams.");
-      } else {
-        // 4. Process each clash
-        for (const pId of clashedPlayerIds) {
-          const bidsToRefund = allBids.filter(b => String(b.player_id) === String(pId));
-          
-          for (const bid of bidsToRefund) {
-            // Refund the money
-            const { data: owner } = await supabase.from('league_owners').select('budget').eq('id', bid.owner_id).single();
-            const newBudget = (owner.budget || 0) + bid.winning_bid;
-            
-            await supabase.from('league_owners').update({ budget: newBudget }).eq('id', bid.owner_id);
-            
-            // Delete the specific bid entry
-            await supabase.from('auction_results')
-              .delete()
-              .eq('player_id', pId)
-              .eq('owner_id', bid.owner_id);
-          }
+      for (const pId of clashedIds) {
+        const toRefund = allBids.filter(b => String(b.player_id) === String(pId));
+        for (const bid of toRefund) {
+          const { data: owner } = await supabase.from('league_owners').select('budget').eq('id', bid.owner_id).single();
+          await supabase.from('league_owners').update({ budget: owner.budget + bid.winning_bid }).eq('id', bid.owner_id);
+          await supabase.from('auction_results').delete().eq('player_id', pId).eq('owner_id', bid.owner_id);
         }
-        alert(`Resolved ${clashedPlayerIds.length} clashes. Players are now free for Re-Auction.`);
       }
-
-      // 5. Unlock all teams for Phase 3
       await supabase.from('league_owners').update({ is_locked: false }).neq('id', 0);
-      
-      syncAdmin(); // Refresh the Admin view
-    } catch (e) {
-      console.error("Resolution Error:", e);
-      alert("Error: " + e.message);
-    }
+      alert("PHASE RESOLVED: Clashed players cleared for Re-Auction!");
+      syncAdmin();
+    } catch (e) { alert("Error: " + e.message); }
     setLoading(false);
   };
+
+  // --- RESET ENTIRE TOURNAMENT ---
   const resetTournament = async () => {
-    if (!confirm("This will permanently WIPE all squads and reset budgets. Proceed?")) return;
-    try {
-      await supabase.from('auction_results').delete().neq('owner_id', '0'); 
-      await supabase.from('bids_draft').delete().neq('player_id', 0);
-      await supabase.from('league_owners').update({ budget: 150, is_locked: false }).neq('team_name', ''); 
-      await supabase.from('active_auction').update({ player_id: null, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
-      alert("TOURNAMENT WIPED.");
-      syncAdmin();
-    } catch (e) {
-      alert("Critical Error: " + e.message);
+    if (!confirm("PERMANENT WIPE: This will reset EVERYTHING. Proceed?")) return;
+    setLoading(true);
+    await supabase.from('auction_results').delete().neq('owner_id', '0'); 
+    await supabase.from('bids_draft').delete().neq('player_id', 0);
+    await supabase.from('league_owners').update({ budget: 150, is_locked: false }).neq('team_name', ''); 
+    await supabase.from('active_auction').update({ player_id: null, is_sold: false, winner_name: '', winning_amount: 0 }).eq('id', 2);
+    alert("TOURNAMENT WIPED.");
+    setLoading(false);
+    syncAdmin();
+  };
+
+  // --- RE-SYNC BUDGET AUDIT ---
+  const recalculateBudgets = async () => {
+    setLoading(true);
+    const { data: owners } = await supabase.from('league_owners').select('*');
+    const { data: results } = await supabase.from('auction_results').select('*');
+    for (const owner of owners) {
+      const spent = results.filter(r => String(r.owner_id) === String(owner.id)).reduce((sum, p) => sum + p.winning_bid, 0);
+      await supabase.from('league_owners').update({ budget: 150 - spent }).eq('id', owner.id);
     }
+    alert("Budgets Re-synced!");
+    setLoading(false);
   };
 
   const createOwner = async () => {
     if(!ownerName) return;
-    const { data, error } = await supabase.from('league_owners').insert([{ team_name: ownerName, budget: 150 }]).select();
-    if(!error) alert(`Owner Created! Team: ${data[0].team_name}`);
+    await supabase.from('league_owners').insert([{ team_name: ownerName, budget: 150 }]);
+    alert("Team Added!");
     setOwnerName('');
   };
 
@@ -113,87 +97,72 @@ export default function Admin() {
     await supabase.from('bids_draft').delete().eq('player_id', bid.player_id);
   };
 
-  const recalculateBudgets = async () => {
-  setLoading(true);
-  try {
-    // 1. Get all owners and all results
-    const { data: owners } = await supabase.from('league_owners').select('*');
-    const { data: results } = await supabase.from('auction_results').select('*');
-
-    for (const owner of owners) {
-      // Find all players belonging to this owner
-      const myPlayers = results.filter(r => String(r.owner_id) === String(owner.id));
-      const totalSpent = myPlayers.reduce((sum, p) => sum + p.winning_bid, 0);
-      
-      // Update the budget (150 - total spent)
-      await supabase.from('league_owners')
-        .update({ budget: 150 - totalSpent })
-        .eq('id', owner.id);
-    }
-
-    alert("Budgets recalculated successfully based on current squads!");
-    syncAdmin();
-  } catch (e) {
-    alert("Error: " + e.message);
-  }
-  setLoading(false);
-};
-
   return (
-    <div style={{ background: '#000', color: '#fff', minHeight: '100vh', padding: '30px', textAlign: 'center', fontFamily: 'sans-serif' }}>
-      <h1 style={{color: '#e11d48'}}>AUCTION CONTROL TOWER</h1>
+    <div style={{ background: '#050505', backgroundImage: 'radial-gradient(circle at 50% 0%, #1a1a1a 0%, #050505 100%)', color: '#fff', minHeight: '100vh', padding: '30px', fontFamily: 'sans-serif' }}>
+      <h1 style={{ textAlign: 'center', color: '#e11d48', fontSize: '2.5rem', textShadow: '0 0 20px rgba(225, 29, 72, 0.4)' }}>CONTROL TOWER</h1>
       
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', maxWidth: '1000px', margin: '0 auto 40px auto' }}>
-        <div style={{ background: '#111', padding: '20px', borderRadius: '15px', border: '1px solid #333' }}>
-          <h3>TOURNAMENT SETUP</h3>
-          <input value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="New Team Name" style={{ padding: '10px', borderRadius: '5px' }} />
-          <button onClick={createOwner} style={{ padding: '10px 20px', background: '#22c55e', border: 'none', marginLeft: '5px', fontWeight: 'bold', borderRadius: '5px' }}>ADD TEAM</button>
-          <hr style={{margin: '20px 0', borderColor: '#222'}} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px', maxWidth: '1200px', margin: '0 auto 40px auto' }}>
+        
+        {/* SETUP BOX */}
+        <div style={{ background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(10px)', padding: '25px', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.05)' }}>
+          <h3 style={{ marginTop: 0, color: '#fbbf24' }}>TOURNAMENT MGMT</h3>
+          <input value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="New Team Name" style={{ padding: '12px', background: '#000', border: '1px solid #333', color: '#fff', borderRadius: '8px', width: '60%' }} />
+          <button onClick={createOwner} style={{ padding: '12px', background: '#22c55e', border: 'none', marginLeft: '5px', fontWeight: 'bold', borderRadius: '8px', cursor: 'pointer' }}>ADD</button>
           
-          <button 
-            disabled={loading}
-            onClick={resolveSecretBids} 
-            style={{ width: '100%', padding: '15px', background: '#22c55e', color: '#000', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer', marginBottom: '10px' }}
-          >
-            {loading ? "PROCESSING..." : "✅ RESOLVE SECRET BIDS (PHASE 1 & 2)"}
-          </button>
-
-         <button 
-            onClick={recalculateBudgets} 
-            style={{ background: '#3b82f6', color: '#fff', padding: '10px', borderRadius: '5px', border: 'none', marginTop: '10px', cursor: 'pointer' }}>
-            🔄 RE-SYNC ALL BUDGETS
-        </button>   
-
-          <button onClick={resetTournament} style={{ width: '100%', padding: '15px', background: '#e11d48', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}>RESET ENTIRE TOURNAMENT</button>
+          <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <button onClick={resolveSecretBids} disabled={loading} style={{ padding: '15px', background: '#22c55e', color: '#000', fontWeight: 'bold', borderRadius: '10px', border: 'none', cursor: 'pointer' }}>✅ RESOLVE SECRET PHASE</button>
+            <button onClick={recalculateBudgets} style={{ padding: '10px', background: '#3b82f6', color: '#fff', fontWeight: 'bold', borderRadius: '10px', border: 'none', cursor: 'pointer' }}>🔄 RE-SYNC BUDGETS</button>
+            <button onClick={resetTournament} style={{ padding: '15px', background: '#e11d48', color: '#fff', fontWeight: 'bold', borderRadius: '10px', border: 'none', cursor: 'pointer' }}>⚠️ RESET TOURNAMENT</button>
+          </div>
         </div>
 
-        <div style={{ background: '#111', padding: '20px', borderRadius: '15px', border: '1px solid #333' }}>
-          <h3>LIVE PUSH</h3>
-          <input value={pid} onChange={e => setPid(e.target.value)} placeholder="PID" style={{ padding: '15px', width: '80px', textAlign: 'center', borderRadius: '5px' }} />
-          <button onClick={pushPlayer} style={{ padding: '15px 30px', background: '#fbbf24', border: 'none', marginLeft: '10px', fontWeight: 'bold', borderRadius: '5px' }}>PUSH PLAYER</button>
+        {/* LIVE PUSH BOX */}
+        <div style={{ background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(10px)', padding: '25px', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>
+          <h3 style={{ marginTop: 0, color: '#fbbf24' }}>PHASE 3 PUSH</h3>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', marginTop: '30px' }}>
+            <input value={pid} onChange={e => setPid(e.target.value)} placeholder="PID" style={{ padding: '15px', width: '80px', textAlign: 'center', background: '#000', border: '1px solid #444', color: '#fff', borderRadius: '12px', fontSize: '1.2rem' }} />
+            <button onClick={pushPlayer} style={{ padding: '15px 30px', background: '#fbbf24', color: '#000', border: 'none', fontWeight: '900', borderRadius: '12px', cursor: 'pointer' }}>PUSH PLAYER</button>
+          </div>
+          <p style={{ color: '#444', marginTop: '15px', fontSize: '0.8rem' }}>Enter Player ID and hit Push to start Live Bidding</p>
         </div>
       </div>
 
-      {data.isSold ? (
-        <div style={{ padding: '60px', background: '#0a0a0a', border: '2px dashed #22c55e', borderRadius: '20px', maxWidth: '600px', margin: '0 auto' }}>
-          <h1 style={{ color: '#22c55e', fontSize: '4rem', margin: 0 }}>SOLD!</h1>
-          <h2>{data.winner?.league_owners?.team_name}</h2>
-          <p style={{ color: '#666' }}>Push next player to clear.</p>
-        </div>
-      ) : data.player ? (
-        <div style={{ background: '#111', padding: '40px', borderRadius: '30px', border: '1px solid #444', maxWidth: '800px', margin: '0 auto' }}>
-          <h1>{data.player.name}</h1>
-          <h2 style={{ fontSize: '5rem', color: '#fbbf24' }}>{data.bids[0] ? data.bids[0].bid_amount.toFixed(2) : (data.player.base_price/10000000).toFixed(2)} Cr</h2>
-          <div style={{ textAlign: 'left', marginTop: '40px' }}>
-            {data.bids.map(b => (
-              <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '20px', background: '#000', marginBottom: '10px', borderRadius: '15px', alignItems: 'center' }}>
-                <span style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{b.league_owners.team_name}</span>
-                <button onClick={() => handleSold(b)} style={{ background: '#22c55e', border: 'none', padding: '10px 30px', borderRadius: '8px', fontWeight: 'bold' }}>SOLD AT {b.bid_amount.toFixed(2)}</button>
-              </div>
-            ))}
+      {/* LIVE STAGE VIEW */}
+      <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+        {data.isSold ? (
+          <div style={{ padding: '60px', background: 'rgba(34, 197, 94, 0.05)', border: '2px dashed #22c55e', borderRadius: '30px', textAlign: 'center' }}>
+            <h1 style={{ color: '#22c55e', fontSize: '4rem', margin: 0 }}>SOLD!</h1>
+            <h2 style={{ fontSize: '2rem' }}>{data.winner_name}</h2>
+            <div style={{ color: '#fbbf24', fontSize: '1.5rem', fontWeight: 'bold' }}>{data.winning_amount} Cr</div>
           </div>
-        </div>
-      ) : <h1 style={{ color: '#222', marginTop: '100px' }}>READY...</h1>}
+        ) : data.player ? (
+          <div style={{ background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(20px)', padding: '40px', borderRadius: '40px', border: '1px solid #444', textAlign: 'center' }}>
+            <img 
+              src={`/players/${data.player.name.toLowerCase().replace(/ /g, '_')}.jpg`} 
+              style={{ width: '150px', height: '150px', borderRadius: '50%', objectFit: 'cover', border: '4px solid #fbbf24', marginBottom: '20px' }}
+              onError={(e) => { e.target.src = '/players/place_holder.jpg'; }}
+            />
+            <h1 style={{ fontSize: '3rem', margin: 0 }}>{data.player.name}</h1>
+            <div style={{ fontSize: '5rem', color: '#fbbf24', fontWeight: '900' }}>
+              {data.bids[0] ? data.bids[0].bid_amount.toFixed(2) : (data.player.base_price/10000000).toFixed(2)} <span style={{fontSize:'1.5rem'}}>Cr</span>
+            </div>
+
+            <div style={{ marginTop: '40px', textAlign: 'left' }}>
+              <h4 style={{ color: '#666', borderBottom: '1px solid #222', paddingBottom: '10px' }}>ACTIVE BIDS</h4>
+              {data.bids.map(b => (
+                <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '20px', background: '#000', marginBottom: '10px', borderRadius: '15px', alignItems: 'center', border: '1px solid #222' }}>
+                  <span style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{b.league_owners.team_name}</span>
+                  <button onClick={() => handleSold(b)} style={{ background: '#22c55e', color: '#000', border: 'none', padding: '12px 30px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>SELL AT {b.bid_amount.toFixed(2)}</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{ color: '#222', marginTop: '100px', textAlign: 'center' }}>
+            <h1 style={{ fontSize: '4rem' }}>READY...</h1>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
