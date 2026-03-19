@@ -9,7 +9,7 @@
     "react": "latest",
     "react-dom": "latest",
     "@supabase/supabase-js": "latest",
-    "canvas-confetti": "latest"
+    "canvas-confetti": "latest",
     "framer-motion": "latest"
   }
 }
